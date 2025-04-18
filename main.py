@@ -36,7 +36,7 @@ def buscar_eventos(token, inicio, fim, pagina=1):
     }
     params = {
         "pagina": pagina,
-        "tamanho_pagina": 100
+        "tamanho_pagina": 1000
     }
     resp = requests.post(url, headers=headers, params=params, json=payload)
     if resp.status_code == 400:
