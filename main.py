@@ -1,24 +1,23 @@
+import os
 import requests
 import psycopg2
-from datetime import datetime
-import os
+import time
 
-# Credenciais da API (configurar como secrets no GitHub Actions)
+# === VARIÁVEIS DE AMBIENTE ===
 CLIENT_ID = os.getenv("CONTA_AZUL_CLIENT_ID")
 CLIENT_SECRET = os.getenv("CONTA_AZUL_CLIENT_SECRET")
 REFRESH_TOKEN = os.getenv("CONTA_AZUL_REFRESH_TOKEN")
 
-# PostgreSQL (ElephantSQL)
 DB_HOST = os.getenv("PG_HOST")
 DB_NAME = os.getenv("PG_DB")
 DB_USER = os.getenv("PG_USER")
 DB_PASSWORD = os.getenv("PG_PASSWORD")
 
-# Datas de interesse
-DATA_INICIO = "2016-01-01"
-DATA_FIM = "2035-12-31"
+data_inicio = "2016-01-01"
+data_fim = "2035-12-31"
 
-def get_access_token():
+# === 1. GERAR ACCESS TOKEN ===
+def obter_token():
     url = "https://api.contaazul.com/oauth2/token"
     data = {
         "grant_type": "refresh_token",
@@ -30,84 +29,103 @@ def get_access_token():
     response.raise_for_status()
     return response.json()["access_token"]
 
-def get_centros_de_custo(token):
-    url = "https://api-v2.contaazul.com/v1/centro-de-custo"
+# === 2. OBTER TODOS OS CENTROS DE CUSTO ===
+def obter_centros_de_custo(token):
+    url = "https://api.contaazul.com/v1/centro-de-custo?pagina=1&tamanho_pagina=1000"
     headers = {"Authorization": f"Bearer {token}"}
-    params = {"pagina": 1, "tamanho_pagina": 1000}
-    response = requests.get(url, headers=headers, params=params)
+    response = requests.get(url, headers=headers)
     response.raise_for_status()
-    centros = response.json().get("itens", [])
-    return {centro["id"]: centro["nome"] for centro in centros}
+    return response.json().get("itens", [])
 
-def get_contas_a_pagar(token, centro_id, nome_centro):
-    url = "https://api-v2.contaazul.com/v1/financeiro/eventos-financeiros/contas-a-pagar/buscar"
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json"
-    }
-
+# === 3. OBTER CONTAS A PAGAR POR CENTRO ===
+def obter_contas_a_pagar(token, centro_id, nome_centro):
+    contas = []
     page = 1
-    all_results = []
     while True:
-        params = {"pagina": page, "tamanho_pagina": 100}
+        url = f"https://api.contaazul.com/v1/financeiro/eventos-financeiros/contas-a-pagar/buscar?pagina={page}&tamanho_pagina=100"
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json"
+        }
         body = {
-            "data_vencimento_de": DATA_INICIO,
-            "data_vencimento_ate": DATA_FIM,
+            "data_vencimento_de": data_inicio,
+            "data_vencimento_ate": data_fim,
             "ids_centros_de_custo": [centro_id]
         }
-        response = requests.post(url, headers=headers, json=body, params=params)
+        response = requests.post(url, headers=headers, json=body)
         if response.status_code != 200:
+            print(f"Erro página {page}: {response.status_code}")
             break
+
         data = response.json().get("itens", [])
         if not data:
             break
-        for item in data:
-            item["nome_centro"] = nome_centro
-        all_results.extend(data)
-        page += 1
-    return all_results
 
+        for item in data:
+            contas.append({
+                "id": item["id"],
+                "status": item.get("status"),
+                "descricao": item.get("descricao"),
+                "total": item.get("total"),
+                "data_vencimento": item.get("data_vencimento"),
+                "nome_centro": nome_centro
+            })
+
+        page += 1
+        time.sleep(0.5)
+
+    return contas
+
+# === 4. INSERIR OU ATUALIZAR NO POSTGRES (UPSERT) ===
 def salvar_no_postgres(dados):
     conn = psycopg2.connect(
-        host=DB_HOST,
         dbname=DB_NAME,
         user=DB_USER,
-        password=DB_PASSWORD
+        password=DB_PASSWORD,
+        host=DB_HOST,
+        port=5432
     )
-    cursor = conn.cursor()
-    cursor.execute("DELETE FROM contas_a_pagar")  # Limpa a tabela antes de inserir
+    cur = conn.cursor()
+
+    insert_query = """
+        INSERT INTO contas_a_pagar (id, status, descricao, total, data_vencimento, nome_centro)
+        VALUES (%s, %s, %s, %s, %s, %s)
+        ON CONFLICT (id) DO UPDATE SET
+            status = EXCLUDED.status,
+            descricao = EXCLUDED.descricao,
+            total = EXCLUDED.total,
+            data_vencimento = EXCLUDED.data_vencimento,
+            nome_centro = EXCLUDED.nome_centro;
+    """
 
     for item in dados:
-        cursor.execute("""
-            INSERT INTO contas_a_pagar (id, status, descricao, total, data_vencimento, nome_centro)
-            VALUES (%s, %s, %s, %s, %s, %s)
-            ON CONFLICT (id) DO NOTHING
-        """, (
-            item.get("id"),
-            item.get("status"),
-            item.get("descricao"),
-            item.get("total"),
-            item.get("data_vencimento"),
-            item.get("nome_centro")
+        cur.execute(insert_query, (
+            item["id"],
+            item["status"],
+            item["descricao"],
+            item["total"],
+            item["data_vencimento"],
+            item["nome_centro"]
         ))
+
     conn.commit()
-    cursor.close()
+    cur.close()
     conn.close()
+    print("✅ Dados salvos com sucesso.")
 
+# === 5. MAIN ===
 def main():
-    print("Iniciando sincronização...")
-    token = get_access_token()
-    centros = get_centros_de_custo(token)
+    token = obter_token()
+    centros = obter_centros_de_custo(token)
+    todas_contas = []
 
-    todos_dados = []
-    for centro_id, nome_centro in centros.items():
-        print(f"Coletando dados do centro: {nome_centro}")
-        eventos = get_contas_a_pagar(token, centro_id, nome_centro)
-        todos_dados.extend(eventos)
+    for centro in centros:
+        print(f"🔍 Buscando centro: {centro['nome']}")
+        contas = obter_contas_a_pagar(token, centro["id"], centro["nome"])
+        print(f"→ {len(contas)} contas encontradas.")
+        todas_contas.extend(contas)
 
-    print(f"Total de eventos coletados: {len(todos_dados)}")
-    salvar_no_postgres(todos_dados)
-    print("Dados salvos com sucesso no PostgreSQL!")
+    salvar_no_postgres(todas_contas)
 
 if __name__ == "__main__":
     main()
