@@ -3,8 +3,8 @@ import psycopg2
 import time
 
 # === CONFIGURAÇÕES ===
-client_id = "7yBBweJ57L8QRO3WQJc43bg0rile3nJj"
-client_secret = "TtArMyx52TT9g9zm5ujike6zlrIxtZrI"
+client_id = "42e1bhrsoon4q4li2mrbgdgae7"
+client_secret = "1ve3ahg87cbm278211tkffbn85ck3106btott1gd2fffvleeqhk5"
 refresh_token = "eyJjdHkiOiJKV1QiLCJlbmMiOiJBMjU2R0NNIiwiYWxnIjoiUlNBLU9BRVAifQ.qf71_1fUSNQedT6GXLfLtCq9yjS5mTwVw4JIRHX8k-pyTcQh-6n9_vAf3DaZWdv-OPKoAe7mCwnH7Z8_kF3sTcAGD8HhxWUmsKk_ODNar5eKbrcfNKHwi_1rW9umO2QRJw6proJ4cczSJah-FulkGXRgAenlQh0lIl4VdHW05Opsr0_XHmlJkutCkpER2A2XkXj0CQ2dk8BWaveCZtHsGkMh-ddr8JPXbukmnZlXBPtWDpl_Vxae68Ov6ERv5VZoWmesrc6bV9hEnZJXye29uvR9yzdEp759zlyBpW6rBAQWrzjQdCxormS370ylNjDwdeScAaLPpFBgwOH052XRBw.iomfvypDrU56PHWS.Tm8JW7e25tm5ljby_kaLhC4uil-71x9bhXNNtqP_bDDNKPUC_46082LepirFrgFCsBSQNBWlcJ5Kq2nqdW1db186WkWNQt2Q1DdSKTrlS7M-hmMcg0oDngpfID80M2XKLoMvypSEr3vvwLk2a9VggKdaVxsWQrsxcm_iiNTfQqolvmrHiWZWULL_Q75SfBaS5tWGH1Og7gynaNclGRKtWAKQyv0hYE8buX77m1UIzwjTqhEs2dQeQ-BBxApvOvojv4AV7q4OkM2PVR4TX0B5j5HXtZNSdZHnGjrmR8G5GwZ2pPr2t4G-fuXwxbaBCnPGGl51VurCCUc-oGwi8RoMPskApORffX1U7VWdOgq83JctrlIVm4uXSpPM-eY1zZui_IIbsqGGr3-gANUjjLGXXmWD5VNXeDVRXC3_-vyXlOiH682CrhWxeZEIb5TZ6jdzrvgi-knKjnket3XAmCjGOIrEFAuMJqRTpyLAdMk7uzV3ZubmcIdz7ODyjVWQ-CPCFagtrzJ6B-kAhko_OZCdyGXZptFPVhFnXCv5-vFzTfIygsiP8hXX56iphqIBInv9XO-HbunvQ1vdieMiYrawNqpNdofn3aTGjSpo268X461szEe-x3a9UStZCtB9zBvYMUGNG_jaOGhrMeIDxNkjxYIRu_nUxETu8YLgenO7GscKpgw0zULwJjWJ72Ja46Mdnmb3zEZe9iBjhwRujHVeRcr-SFQCbe1T9fpSk7xu2KkacW7zpZFx7en4aP6AbtswnJSPuzdaIei7KTLv3OfDOzYta_PG_JGOyA3VLOMaYGIAvGQuYkEWHgLhuH2seommJpofRpgnCYLdvBrYJKG_uzI--exaCsAnuw9XdhBfcCeGZHxM5Bh4MtHJuAX_unskvxMxB0xuV7tJbGn-HXBDkPvSYJSPyGXohJ5WlsBLBHr3iHo6URzhtWwAapiCHEGKQf7xrjEQuOfe455S4_fRsNU1t7Hfq5iiotCvSUzpgPSdZLBLc3hmyEKwm8gkdolEkyLbTijks86y-lpWu4SRJ_uYyCbwGaLFGbnyki48XKirB_zv3PUZ27DmgzpbpUp-6vK61t6TLMmLPxATzXoULrmqU3y0fQjHNSzbEi1jkH0bCmphn4tSp6yZgDKvDiBilSFw_Bj4vIxk0K1q0Z1vjIaudK12EbZPDMKgHy3ymWJh63nAMgp_Tfi4KpTyipaWWAcqgLuopBXjhDVVKHD4AciZI2SBTw_d0zziyQol958O9k2imc0OKAyHjJ31wd4FKlJkeOnpkOC_QEZ7F2X9JzvLx6eiR4zUNpdXpz6O8iS2iRcxAcSvq2oF3D06Q4wu84SXcdnohPJ5K2zofLtSSX6r0pKA.YRZjRIZXyrW_8hOR1AUanQ"  # encurtado por segurança
 db_config = {
     "dbname": "neondb",
@@ -42,7 +42,7 @@ def obter_contas_a_pagar(token, centro_id, nome_centro):
     contas = []
     page = 1
     while True:
-        url = f"https://api.contaazul.com/v1/financeiro/eventos-financeiros/contas-a-pagar/buscar?pagina={page}&tamanho_pagina=100"
+        url = f"https://api.contaazul.com/v1/financeiro/eventos-financeiros/contas-a-pagar/buscar?pagina={page}&tamanho_pagina=1000"
         headers = {
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json"
