@@ -1,18 +1,18 @@
-import os
 import requests
 import psycopg2
 import time
 
-# === VARIÁVEIS DE AMBIENTE ===
-CLIENT_ID = os.getenv("CONTA_AZUL_CLIENT_ID")
-CLIENT_SECRET = os.getenv("CONTA_AZUL_CLIENT_SECRET")
-REFRESH_TOKEN = os.getenv("CONTA_AZUL_REFRESH_TOKEN")
-
-DB_HOST = os.getenv("PG_HOST")
-DB_NAME = os.getenv("PG_DB")
-DB_USER = os.getenv("PG_USER")
-DB_PASSWORD = os.getenv("PG_PASSWORD")
-
+# === CONFIGURAÇÕES ===
+client_id = "7yBBweJ57L8QRO3WQJc43bg0rile3nJj"
+client_secret = "TtArMyx52TT9g9zm5ujike6zlrIxtZrI"
+refresh_token = "eyJjdHkiOiJKV1QiLCJlbmMiOiJBMjU2R0NNIiwiYWxnIjoiUlNBLU9BRVAifQ.qf71_1fUSNQedT6GXLfLtCq9yjS5mTwVw4JIRHX8k-pyTcQh-6n9_vAf3DaZWdv-OPKoAe7mCwnH7Z8_kF3sTcAGD8HhxWUmsKk_ODNar5eKbrcfNKHwi_1rW9umO2QRJw6proJ4cczSJah-FulkGXRgAenlQh0lIl4VdHW05Opsr0_XHmlJkutCkpER2A2XkXj0CQ2dk8BWaveCZtHsGkMh-ddr8JPXbukmnZlXBPtWDpl_Vxae68Ov6ERv5VZoWmesrc6bV9hEnZJXye29uvR9yzdEp759zlyBpW6rBAQWrzjQdCxormS370ylNjDwdeScAaLPpFBgwOH052XRBw.iomfvypDrU56PHWS.Tm8JW7e25tm5ljby_kaLhC4uil-71x9bhXNNtqP_bDDNKPUC_46082LepirFrgFCsBSQNBWlcJ5Kq2nqdW1db186WkWNQt2Q1DdSKTrlS7M-hmMcg0oDngpfID80M2XKLoMvypSEr3vvwLk2a9VggKdaVxsWQrsxcm_iiNTfQqolvmrHiWZWULL_Q75SfBaS5tWGH1Og7gynaNclGRKtWAKQyv0hYE8buX77m1UIzwjTqhEs2dQeQ-BBxApvOvojv4AV7q4OkM2PVR4TX0B5j5HXtZNSdZHnGjrmR8G5GwZ2pPr2t4G-fuXwxbaBCnPGGl51VurCCUc-oGwi8RoMPskApORffX1U7VWdOgq83JctrlIVm4uXSpPM-eY1zZui_IIbsqGGr3-gANUjjLGXXmWD5VNXeDVRXC3_-vyXlOiH682CrhWxeZEIb5TZ6jdzrvgi-knKjnket3XAmCjGOIrEFAuMJqRTpyLAdMk7uzV3ZubmcIdz7ODyjVWQ-CPCFagtrzJ6B-kAhko_OZCdyGXZptFPVhFnXCv5-vFzTfIygsiP8hXX56iphqIBInv9XO-HbunvQ1vdieMiYrawNqpNdofn3aTGjSpo268X461szEe-x3a9UStZCtB9zBvYMUGNG_jaOGhrMeIDxNkjxYIRu_nUxETu8YLgenO7GscKpgw0zULwJjWJ72Ja46Mdnmb3zEZe9iBjhwRujHVeRcr-SFQCbe1T9fpSk7xu2KkacW7zpZFx7en4aP6AbtswnJSPuzdaIei7KTLv3OfDOzYta_PG_JGOyA3VLOMaYGIAvGQuYkEWHgLhuH2seommJpofRpgnCYLdvBrYJKG_uzI--exaCsAnuw9XdhBfcCeGZHxM5Bh4MtHJuAX_unskvxMxB0xuV7tJbGn-HXBDkPvSYJSPyGXohJ5WlsBLBHr3iHo6URzhtWwAapiCHEGKQf7xrjEQuOfe455S4_fRsNU1t7Hfq5iiotCvSUzpgPSdZLBLc3hmyEKwm8gkdolEkyLbTijks86y-lpWu4SRJ_uYyCbwGaLFGbnyki48XKirB_zv3PUZ27DmgzpbpUp-6vK61t6TLMmLPxATzXoULrmqU3y0fQjHNSzbEi1jkH0bCmphn4tSp6yZgDKvDiBilSFw_Bj4vIxk0K1q0Z1vjIaudK12EbZPDMKgHy3ymWJh63nAMgp_Tfi4KpTyipaWWAcqgLuopBXjhDVVKHD4AciZI2SBTw_d0zziyQol958O9k2imc0OKAyHjJ31wd4FKlJkeOnpkOC_QEZ7F2X9JzvLx6eiR4zUNpdXpz6O8iS2iRcxAcSvq2oF3D06Q4wu84SXcdnohPJ5K2zofLtSSX6r0pKA.YRZjRIZXyrW_8hOR1AUanQ"  # encurtado por segurança
+db_config = {
+    "dbname": "neondb",
+    "user": "neondb_owner",
+    "password": "npg_4IFToxrYbnp8",
+    "host": "ep-noisy-morning-ackra3m4-pooler.sa-east-1.aws.neon.tech",
+    "port": 5432
+}
 data_inicio = "2016-01-01"
 data_fim = "2035-12-31"
 
@@ -21,9 +21,9 @@ def obter_token():
     url = "https://api.contaazul.com/oauth2/token"
     data = {
         "grant_type": "refresh_token",
-        "refresh_token": REFRESH_TOKEN,
-        "client_id": CLIENT_ID,
-        "client_secret": CLIENT_SECRET
+        "refresh_token": refresh_token,
+        "client_id": client_id,
+        "client_secret": client_secret
     }
     response = requests.post(url, data=data)
     response.raise_for_status()
@@ -72,19 +72,13 @@ def obter_contas_a_pagar(token, centro_id, nome_centro):
             })
 
         page += 1
-        time.sleep(0.5)
+        time.sleep(0.5)  # Evita limite de requisições
 
     return contas
 
 # === 4. INSERIR OU ATUALIZAR NO POSTGRES (UPSERT) ===
 def salvar_no_postgres(dados):
-    conn = psycopg2.connect(
-        dbname=DB_NAME,
-        user=DB_USER,
-        password=DB_PASSWORD,
-        host=DB_HOST,
-        port=5432
-    )
+    conn = psycopg2.connect(**db_config)
     cur = conn.cursor()
 
     insert_query = """
@@ -111,7 +105,7 @@ def salvar_no_postgres(dados):
     conn.commit()
     cur.close()
     conn.close()
-    print("✅ Dados salvos com sucesso.")
+    print("Dados salvos com sucesso.")
 
 # === 5. MAIN ===
 def main():
