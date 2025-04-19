@@ -70,7 +70,7 @@ def salvar_no_postgres(dados):
         cur.execute("""
             INSERT INTO contas_a_pagar (id, status, descricao, total, data_vencimento, centro_custo_nome)
             VALUES (%s, %s, %s, %s, %s, %s)
-            ON CONFLICT (id) DO UPDATE;
+            ON CONFLICT (id) DO UPDATE
         SET 
                 status = EXCLUDED.status,
                 descricao = EXCLUDED.descricao,
