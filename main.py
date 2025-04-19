@@ -23,8 +23,21 @@ def get_access_token():
     response.raise_for_status()
     return response.json()["access_token"]
 
+# -------- BUSCAR CENTROS DE CUSTO --------
+def buscar_centros_de_custo(token):
+    url = "https://api-v2.contaazul.com/v1/centro-de-custo"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json"
+    }
+    params = {"pagina": 1, "tamanho_pagina": 1000}
+    resp = requests.get(url, headers=headers, params=params)
+    resp.raise_for_status()
+    centros = resp.json()
+    return {centro["id"]: centro["nome"] for centro in centros}
+
 # -------- CONSULTA API --------
-def buscar_eventos(token, inicio, fim, pagina=1):
+def buscar_eventos(token, inicio, fim, centro_id, pagina=1):
     url = f"https://api-v2.contaazul.com/v1/financeiro/eventos-financeiros/contas-a-pagar/buscar"
     headers = {
         "Authorization": f"Bearer {token}",
@@ -32,7 +45,8 @@ def buscar_eventos(token, inicio, fim, pagina=1):
     }
     payload = {
         "data_vencimento_de": inicio,
-        "data_vencimento_ate": fim
+        "data_vencimento_ate": fim,
+        "ids_centros_de_custo": [centro_id]
     }
     params = {
         "pagina": pagina,
@@ -50,15 +64,16 @@ def salvar_no_postgres(dados):
     cur = conn.cursor()
     for item in dados:
         cur.execute("""
-            INSERT INTO contas_a_pagar (id, status, descricao, total, data_vencimento)
-            VALUES (%s, %s, %s, %s, %s)
+            INSERT INTO contas_a_pagar (id, status, descricao, total, data_vencimento, centro_custo_nome)
+            VALUES (%s, %s, %s, %s, %s, %s)
             ON CONFLICT (id) DO NOTHING;
         """, (
             item.get("id"),
             item.get("status"),
             item.get("descricao"),
             item.get("total"),
-            item.get("data_vencimento")
+            item.get("data_vencimento"),
+            item.get("centro_custo_nome")
         ))
     conn.commit()
     cur.close()
@@ -67,20 +82,27 @@ def salvar_no_postgres(dados):
 # -------- EXECUÇÃO PRINCIPAL --------
 def main():
     token = get_access_token()
+    centros = buscar_centros_de_custo(token)
+
     data_inicio = datetime.date(2016, 1, 1)
     data_fim = datetime.date(2035, 1, 1)
 
     while data_inicio < data_fim:
         inicio = data_inicio.strftime("%Y-%m-%d")
         fim = (data_inicio + relativedelta(months=1) - datetime.timedelta(days=1)).strftime("%Y-%m-%d")
-        print(f"Buscando de {inicio} até {fim}")
-        pagina = 1
-        while True:
-            eventos = buscar_eventos(token, inicio, fim, pagina)
-            if not eventos:
-                break
-            salvar_no_postgres(eventos)
-            pagina += 1
+        print(f"\nBuscando de {inicio} até {fim}")
+
+        for centro_id, centro_nome in centros.items():
+            print(f"  → Centro de custo: {centro_nome}")
+            pagina = 1
+            while True:
+                eventos = buscar_eventos(token, inicio, fim, centro_id, pagina)
+                if not eventos:
+                    break
+                for evento in eventos:
+                    evento["centro_custo_nome"] = centro_nome
+                salvar_no_postgres(eventos)
+                pagina += 1
         data_inicio += relativedelta(months=1)
 
 if __name__ == "__main__":
