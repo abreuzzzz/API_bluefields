@@ -70,7 +70,14 @@ def salvar_no_postgres(dados):
         cur.execute("""
             INSERT INTO contas_a_pagar (id, status, descricao, total, data_vencimento, centro_custo_nome)
             VALUES (%s, %s, %s, %s, %s, %s)
-            ON CONFLICT (id) DO NOTHING;
+            ON CONFLICT (id) DO UPDATE;
+        SET 
+                status = EXCLUDED.status,
+                descricao = EXCLUDED.descricao,
+                total = EXCLUDED.total,
+                data_vencimento = EXCLUDED.data_vencimento,
+                centro_custo_nome = EXCLUDED.centro_custo_nome
+            WHERE contas_a_pagar.centro_custo_nome IS DISTINCT FROM EXCLUDED.centro_custo_nome;
         """, (
             item.get("id"),
             item.get("status"),
@@ -89,7 +96,7 @@ def main():
     centros = buscar_centros_de_custo(token)
 
     data_inicio = datetime.date(2016, 1, 1)
-    data_fim = datetime.date(2035, 1, 1)
+    data_fim = datetime.date(2020, 1, 1)
 
     while data_inicio < data_fim:
         inicio = data_inicio.strftime("%Y-%m-%d")
