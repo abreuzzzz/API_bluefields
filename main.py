@@ -35,7 +35,7 @@ def get_access_token():
 # === 2. LISTA OS CENTROS DE CUSTO ===
 def obter_centros_de_custo(token):
     url = "https://api.contaazul.com/v1/centro-de-custo?pagina=1&tamanho_pagina=1000"
-    headers = {"Authorization": f"Bearer {token}"}
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     response = requests.get(url, headers=headers)
     response.raise_for_status()
     return response.json().get("itens", [])
