@@ -23,7 +23,7 @@ def get_access_token():
     response.raise_for_status()
     return response.json()["access_token"]
 
-# -------- BUSCAR CENTROS DE CUSTO --------
+# -------- BUSCA CENTROS DE CUSTO --------
 def buscar_centros_de_custo(token):
     url = "https://api-v2.contaazul.com/v1/centro-de-custo"
     headers = {
@@ -33,11 +33,12 @@ def buscar_centros_de_custo(token):
     params = {"pagina": 1, "tamanho_pagina": 1000}
     resp = requests.get(url, headers=headers, params=params)
     resp.raise_for_status()
-    centros = resp.json()
+    dados = resp.json()
+    centros = dados.get("itens", dados)
     return {centro["id"]: centro["nome"] for centro in centros}
 
 # -------- CONSULTA API --------
-def buscar_eventos(token, inicio, fim, centro_id, pagina=1):
+def buscar_eventos(token, inicio, fim, centro_id=None, pagina=1):
     url = f"https://api-v2.contaazul.com/v1/financeiro/eventos-financeiros/contas-a-pagar/buscar"
     headers = {
         "Authorization": f"Bearer {token}",
@@ -45,13 +46,16 @@ def buscar_eventos(token, inicio, fim, centro_id, pagina=1):
     }
     payload = {
         "data_vencimento_de": inicio,
-        "data_vencimento_ate": fim,
-        "ids_centros_de_custo": [centro_id]
+        "data_vencimento_ate": fim
     }
+    if centro_id:
+        payload["ids_centros_de_custo"] = [centro_id]
+
     params = {
         "pagina": pagina,
         "tamanho_pagina": 1000
     }
+
     resp = requests.post(url, headers=headers, params=params, json=payload)
     if resp.status_code == 400:
         return []
@@ -90,19 +94,21 @@ def main():
     while data_inicio < data_fim:
         inicio = data_inicio.strftime("%Y-%m-%d")
         fim = (data_inicio + relativedelta(months=1) - datetime.timedelta(days=1)).strftime("%Y-%m-%d")
-        print(f"\nBuscando de {inicio} até {fim}")
+        print(f"Buscando de {inicio} até {fim}")
 
         for centro_id, centro_nome in centros.items():
-            print(f"  → Centro de custo: {centro_nome}")
             pagina = 1
             while True:
-                eventos = buscar_eventos(token, inicio, fim, centro_id, pagina)
+                eventos = buscar_eventos(token, inicio, fim, centro_id=centro_id, pagina=pagina)
                 if not eventos:
                     break
+
                 for evento in eventos:
-                    evento["centro_custo_nome"] = centro_nome
+                    evento["centro_custo_nome"] = centro_nome  # adiciona nome do centro
+
                 salvar_no_postgres(eventos)
                 pagina += 1
+
         data_inicio += relativedelta(months=1)
 
 if __name__ == "__main__":
