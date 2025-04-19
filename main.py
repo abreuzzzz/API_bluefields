@@ -113,7 +113,7 @@ def salvar_no_postgres(dados):
 
 # === 5. MAIN ===
 def main():
-    token = obter_token()
+    token = get_access_token()
     centros = obter_centros_de_custo(token)
     todas_contas = []
 
