@@ -1,8 +1,8 @@
-name: Atualizar Conta Azul_contas-a-receber_25_29
+name: Atualizar Conta Azul_contas-a-receber_20
 
 on:
   schedule:
-    - cron: '0 22 * * *'  # todos os dias às 08:00 UTC
+    - cron: '20 5 * * *'  # todos os dias às 04:00 UTC
   workflow_dispatch:
 
 jobs:
@@ -25,4 +25,4 @@ jobs:
           REFRESH_TOKEN: ${{ secrets.REFRESH_TOKEN }}
           DB_URL: ${{ secrets.DB_URL }}
         run: |
-          python contas-a-receber_25_29.py
+          python contas-a-receber_20.py
