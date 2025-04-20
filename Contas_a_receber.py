@@ -4,13 +4,11 @@ from sqlalchemy import create_engine, text
 
 # Configurações da API
 API_KEY = "00e3b816-f844-49ee-a75e-3da30f1c2630"
-COOKIE = "cookiesession1=678A3E1D66C7D55F62E048F18AB33C36"
 BASE_URL = "https://services.contaazul.com"
 ENDPOINT = "finance-pro-reader/v1/installment-view"
 HEADERS = {
     "X-Authorization": API_KEY,
-    "Content-Type": "application/json",
-    "Cookie": COOKIE
+    "Content-Type": "application/json"
 }
 POST_DATA = {
     "quickFilter": "ALL",
