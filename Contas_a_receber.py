@@ -3,10 +3,9 @@ import pandas as pd
 from sqlalchemy import create_engine, text
 
 # Configurações
-API_KEY = "00e3b816-f844-49ee-a75e-3da30f1c2630"
 BASE_URL = "https://services.contaazul.com"
 HEADERS = {
-    "X-Authorization": API_KEY,
+    "X-Authorization": "00e3b816-f844-49ee-a75e-3da30f1c2630",
     "Content-Type": "application/json"
 }
 POST_DATA = {
