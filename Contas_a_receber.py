@@ -1,32 +1,89 @@
 import requests
 import psycopg2
-from psycopg2.extras import Json
-import time
+from psycopg2.extras import execute_values
+import json
 
-# Configurações
-API_URL = "https://services.contaazul.com/finance-pro-reader/v1/installment-view"
-API_HEADERS = {
-    "X-Authorization": "00e3b816-f844-49ee-a75e-3da30f1c2630",
-    "Content-Type": "application/json"
+DB_URL = "postgresql://neondb_owner:npg_4IFToxrYbnp8@ep-noisy-morning-ackra3m4-pooler.sa-east-1.aws.neon.tech/neondb?sslmode=require"
+
+HEADERS = {
+    'X-Authorization': '00e3b816-f844-49ee-a75e-3da30f1c2630',
+    'Content-Type': 'application/json'
 }
-API_BODY = {
+
+BODY = {
     "quickFilter": "ALL",
     "serch": "",
     "type": "REVENUE"
 }
-DB_URL = "postgresql://neondb_owner:npg_4IFToxrYbnp8@ep-noisy-morning-ackra3m4-pooler.sa-east-1.aws.neon.tech/neondb?sslmode=require"
 
-# Conexão com o banco
-def connect_db():
-    return psycopg2.connect(DB_URL)
+BASE_URL = "https://services.contaazul.com/finance-pro-reader/v1/installment-view"
+PAGE_SIZE = 1000
 
-# Criação da tabela
+def fetch_all_installments():
+    all_data = []
+    page = 1
+    while True:
+        url = f"{BASE_URL}?page={page}&page_size={PAGE_SIZE}"
+        response = requests.post(url, headers=HEADERS, data=json.dumps(BODY))
+        response.raise_for_status()
+        data = response.json()
+        if not data:
+            break
+        all_data.extend(data)
+        page += 1
+    return all_data
+
+def flatten_record(item):
+    def get(obj, *keys):
+        for key in keys:
+            if obj is None:
+                return None
+            obj = obj.get(key)
+        return obj
+
+    return {
+        "id": item["id"],
+        "version": item.get("version"),
+        "index": item.get("index"),
+        "description": item.get("description"),
+        "due_date": item.get("dueDate"),
+        "expected_payment_date": item.get("expectedPaymentDate"),
+        "last_acquittance_date": item.get("lastAcquittanceDate"),
+        "unpaid": item.get("unpaid"),
+        "paid": item.get("paid"),
+        "status": item.get("status"),
+        "conciliated": item.get("conciliated"),
+        "total_net_value": item.get("totalNetValue"),
+        "gross_value": get(item, "valueComposition", "grossValue"),
+        "interest": get(item, "valueComposition", "interest"),
+        "fine": get(item, "valueComposition", "fine"),
+        "net_value": get(item, "valueComposition", "netValue"),
+        "discount": get(item, "valueComposition", "discount"),
+        "fee": get(item, "valueComposition", "fee"),
+        "financial_account_id": get(item, "financialAccount", "id"),
+        "financial_account_type": get(item, "financialAccount", "type"),
+        "event_id": get(item, "financialEvent", "id"),
+        "event_type": get(item, "financialEvent", "type"),
+        "event_value": get(item, "financialEvent", "value"),
+        "event_description": get(item, "financialEvent", "description"),
+        "event_competence_date": get(item, "financialEvent", "competenceDate"),
+        "negotiator_id": get(item, "financialEvent", "negotiator", "id"),
+        "negotiator_name": get(item, "financialEvent", "negotiator", "name"),
+        "category_description": get(item, "financialEvent", "categoryDescriptions"),
+        "acquittance_id": get(item, "acquittances", 0, "id"),
+        "acquittance_date": get(item, "acquittances", 0, "acquittanceDate"),
+        "acquittance_financial_account_id": get(item, "acquittances", 0, "financialAccount", "id"),
+        "acquittance_financial_account_type": get(item, "acquittances", 0, "financialAccount", "type")
+    }
+
 def create_table():
-    with connect_db() as conn:
+    with psycopg2.connect(DB_URL) as conn:
         with conn.cursor() as cur:
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS installments (
-                    id UUID PRIMARY KEY,
+                    id TEXT PRIMARY KEY,
+                    version INTEGER,
+                    index INTEGER,
                     description TEXT,
                     due_date DATE,
                     expected_payment_date DATE,
@@ -34,172 +91,56 @@ def create_table():
                     unpaid NUMERIC,
                     paid NUMERIC,
                     status TEXT,
-                    total_net_value NUMERIC,
                     conciliated BOOLEAN,
-                    has_digital_receipt BOOLEAN,
-                    acquittance_scheduled BOOLEAN,
-
+                    total_net_value NUMERIC,
                     gross_value NUMERIC,
                     interest NUMERIC,
                     fine NUMERIC,
                     net_value NUMERIC,
                     discount NUMERIC,
                     fee NUMERIC,
-
-                    account_id UUID,
-                    account_type TEXT,
-                    conta_azul_digital BOOLEAN,
-                    cashier_account BOOLEAN,
-
-                    event_id UUID,
+                    financial_account_id TEXT,
+                    financial_account_type TEXT,
+                    event_id TEXT,
                     event_type TEXT,
-                    competence_date DATE,
                     event_value NUMERIC,
                     event_description TEXT,
-                    category_count INT,
-                    cost_center_count INT,
-                    number_of_installments INT,
-                    scheduled BOOLEAN,
-                    category_descriptions TEXT,
-
-                    negotiator_id UUID,
+                    event_competence_date DATE,
+                    negotiator_id TEXT,
                     negotiator_name TEXT,
-
-                    reference_origin TEXT,
-
-                    acquittances JSONB,
-                    raw JSONB
+                    category_description TEXT,
+                    acquittance_id TEXT,
+                    acquittance_date DATE,
+                    acquittance_financial_account_id TEXT,
+                    acquittance_financial_account_type TEXT
                 );
             """)
             conn.commit()
 
-# Limpar tabela antes de inserir novos dados
-def clear_table():
-    with connect_db() as conn:
+def insert_data(records):
+    with psycopg2.connect(DB_URL) as conn:
         with conn.cursor() as cur:
-            cur.execute("DELETE FROM installments;")
-            conn.commit()
-
-# Inserir um registro no banco
-def insert_data(installment):
-    value_comp = installment.get("valueComposition", {})
-    account = installment.get("financialAccount", {})
-    event = installment.get("financialEvent", {})
-    negotiator = event.get("negotiator", {})
-    reference = event.get("reference", {})
-    acquittances = installment.get("acquittances", [])
-
-    with connect_db() as conn:
-        with conn.cursor() as cur:
-            cur.execute("""
+            cur.execute("DELETE FROM installments")
+            execute_values(cur, """
                 INSERT INTO installments (
-                    id, description, due_date, expected_payment_date, last_acquittance_date,
-                    unpaid, paid, status, total_net_value, conciliated, has_digital_receipt,
-                    acquittance_scheduled,
-
-                    gross_value, interest, fine, net_value, discount, fee,
-
-                    account_id, account_type, conta_azul_digital, cashier_account,
-
-                    event_id, event_type, competence_date, event_value, event_description,
-                    category_count, cost_center_count, number_of_installments, scheduled,
-                    category_descriptions,
-
-                    negotiator_id, negotiator_name,
-                    reference_origin,
-
-                    acquittances, raw
-                ) VALUES (
-                    %(id)s, %(description)s, %(dueDate)s, %(expectedPaymentDate)s, %(lastAcquittanceDate)s,
-                    %(unpaid)s, %(paid)s, %(status)s, %(totalNetValue)s, %(conciliated)s,
-                    %(hasDigitalReceipt)s, %(acquittanceScheduled)s,
-
-                    %(gross_value)s, %(interest)s, %(fine)s, %(net_value)s, %(discount)s, %(fee)s,
-
-                    %(account_id)s, %(account_type)s, %(conta_azul_digital)s, %(cashier_account)s,
-
-                    %(event_id)s, %(event_type)s, %(competence_date)s, %(event_value)s, %(event_description)s,
-                    %(category_count)s, %(cost_center_count)s, %(number_of_installments)s,
-                    %(scheduled)s, %(category_descriptions)s,
-
-                    %(negotiator_id)s, %(negotiator_name)s,
-                    %(reference_origin)s,
-
-                    %(acquittances)s, %(raw)s
+                    id, version, index, description, due_date,
+                    expected_payment_date, last_acquittance_date, unpaid, paid, status,
+                    conciliated, total_net_value, gross_value, interest, fine,
+                    net_value, discount, fee, financial_account_id, financial_account_type,
+                    event_id, event_type, event_value, event_description, event_competence_date,
+                    negotiator_id, negotiator_name, category_description,
+                    acquittance_id, acquittance_date, acquittance_financial_account_id, acquittance_financial_account_type
                 )
-                ON CONFLICT (id) DO NOTHING
-            """, {
-                'id': installment.get("id"),
-                'description': installment.get("description"),
-                'dueDate': installment.get("dueDate"),
-                'expectedPaymentDate': installment.get("expectedPaymentDate"),
-                'lastAcquittanceDate': installment.get("lastAcquittanceDate"),
-                'unpaid': installment.get("unpaid"),
-                'paid': installment.get("paid"),
-                'status': installment.get("status"),
-                'totalNetValue': installment.get("totalNetValue"),
-                'conciliated': installment.get("conciliated"),
-                'hasDigitalReceipt': installment.get("hasDigitalReceipt"),
-                'acquittanceScheduled': installment.get("acquittanceScheduled"),
-
-                'gross_value': value_comp.get("grossValue"),
-                'interest': value_comp.get("interest"),
-                'fine': value_comp.get("fine"),
-                'net_value': value_comp.get("netValue"),
-                'discount': value_comp.get("discount"),
-                'fee': value_comp.get("fee"),
-
-                'account_id': account.get("id"),
-                'account_type': account.get("type"),
-                'conta_azul_digital': account.get("contaAzulDigital"),
-                'cashier_account': account.get("cashierAccount"),
-
-                'event_id': event.get("id"),
-                'event_type': event.get("type"),
-                'competence_date': event.get("competenceDate"),
-                'event_value': event.get("value"),
-                'event_description': event.get("description"),
-                'category_count': event.get("categoryCount"),
-                'cost_center_count': event.get("costCenterCount"),
-                'number_of_installments': event.get("numberOfInstallments"),
-                'scheduled': event.get("scheduled"),
-                'category_descriptions': event.get("categoryDescriptions"),
-
-                'negotiator_id': negotiator.get("id"),
-                'negotiator_name': negotiator.get("name"),
-
-                'reference_origin': reference.get("origin"),
-
-                'acquittances': Json(acquittances),
-                'raw': Json(installment)
-            })
+                VALUES %s
+            """, [tuple(flatten_record(r).values()) for r in records])
             conn.commit()
 
-# Paginar e salvar todos os dados
-def fetch_all_data():
-    page = 1
-    while True:
-        print(f"Buscando página {page}")
-        response = requests.post(f"{API_URL}?page={page}&page_size=1000",
-                                 headers=API_HEADERS,
-                                 json=API_BODY)
-        if response.status_code != 200:
-            print(f"Erro na requisição da página {page}: {response.status_code}")
-            break
-
-        data = response.json()
-        if not data:
-            break
-
-        for item in data:
-            insert_data(item)
-
-        page += 1
-        time.sleep(0.5)  # Evita sobrecarga da API
-
-# Execução principal
 if __name__ == "__main__":
+    print("Criando tabela (se necessário)...")
     create_table()
-    clear_table()
-    fetch_all_data()
-    print("Importação concluída com sucesso.")
+    print("Coletando dados da API...")
+    raw_data = fetch_all_installments()
+    print(f"{len(raw_data)} registros coletados.")
+    print("Inserindo dados no banco...")
+    insert_data(raw_data)
+    print("Concluído.")
