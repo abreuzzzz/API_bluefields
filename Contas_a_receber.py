@@ -178,7 +178,7 @@ while True:
     conn_db.commit()
     print(f"Página {page} inserida com sucesso.")
     page += 1
-    time.sleep(0.3)
+    time.sleep(10)
 
 print("Carga completa.")
 
