@@ -31,7 +31,7 @@ def get_data():
     page = 1
     while True:
         url = f"{BASE_URL}/{ENDPOINT}?page={page}&page_size=1000"
-        response = requests.post(url, headers=HEADERS, data=payload)
+        response = requests.request("POST",url, headers=HEADERS, data=payload)
         response.raise_for_status()
         items = response.json().get("items", [])
         if not items:
