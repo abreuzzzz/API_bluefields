@@ -1,131 +1,135 @@
 import requests
-import pandas as pd
 import json
-from sqlalchemy import create_engine, text
+import psycopg2
+from psycopg2.extras import execute_values
 
-# Configurações da API
-API_KEY = "00e3b816-f844-49ee-a75e-3da30f1c2630"
-COOKIE = "cookiesession1=678A3E1D66C7D55F62E048F18AB33C36"
-BASE_URL = "https://services.contaazul.com"
-ENDPOINT = "finance-pro-reader/v1/installment-view"
+# URL da API
+API_URL = "https://services.contaazul.com/finance-pro-reader/v1/installment-view"
+
+# Cabeçalhos da requisição
 HEADERS = {
-    "X-Authorization": API_KEY,
-    "Content-Type": "application/json",
-    "Cookie": COOKIE
+    'X-Authorization': '00e3b816-f844-49ee-a75e-3da30f1c2630',
+    'Content-Type': 'application/json',
+    'Cookie': 'cookiesession1=678A3E1D66C7D55F62E048F18AB33C36'
 }
 
-# Payload corrigido
-payload = json.dumps({
+# Parâmetros da requisição
+PAYLOAD = {
     "quickFilter": "ALL",
-    "search": "",
+    "serch": "",
     "type": "REVENUE"
-})
+}
 
-# Banco de dados
+# Configurações do banco de dados
 DB_URL = "postgresql://neondb_owner:npg_4IFToxrYbnp8@ep-noisy-morning-ackra3m4-pooler.sa-east-1.aws.neon.tech/neondb?sslmode=require"
-TABLE_NAME = "contaazul_receitas"
 
-# Função para buscar dados paginados
-def get_data():
-    all_items = []
+# Conexão com o banco
+conn = psycopg2.connect(DB_URL)
+cur = conn.cursor()
+
+# Cria a tabela (executar só uma vez ou adaptar para criar se não existir)
+cur.execute("""
+DROP TABLE IF EXISTS installments;
+CREATE TABLE installments (
+    id TEXT PRIMARY KEY,
+    version INT,
+    idx INT,
+    description TEXT,
+    due_date DATE,
+    expected_payment_date DATE,
+    last_acquittance_date DATE,
+    unpaid NUMERIC,
+    paid NUMERIC,
+    status TEXT,
+    conciliated BOOLEAN,
+    total_net_value NUMERIC,
+    gross_value NUMERIC,
+    interest NUMERIC,
+    fine NUMERIC,
+    net_value NUMERIC,
+    discount NUMERIC,
+    fee NUMERIC,
+    financial_account_id TEXT,
+    financial_account_type TEXT,
+    financial_event_id TEXT,
+    financial_event_type TEXT,
+    financial_event_date DATE,
+    financial_event_value NUMERIC,
+    financial_event_description TEXT,
+    category_descriptions TEXT
+);
+""")
+conn.commit()
+
+# Função para coletar todas as páginas
+def fetch_all_installments():
+    all_data = []
     page = 1
+
     while True:
-        url = f"{BASE_URL}/{ENDPOINT}?page={page}&page_size=1000"
-        response = requests.request("POST",url, headers=HEADERS, data=payload)
-        response.raise_for_status()
-        items = response.json().get("items", [])
+        print(f"Coletando página {page}...")
+        response = requests.post(
+            f"{API_URL}?page={page}&page_size=1000",
+            headers=HEADERS,
+            data=json.dumps(PAYLOAD)
+        )
+        data = response.json()
+
+        items = data.get('items', [])
         if not items:
             break
-        all_items.extend(items)
+
+        for item in items:
+            all_data.append((
+                item.get("id"),
+                item.get("version"),
+                item.get("index"),
+                item.get("description"),
+                item.get("dueDate"),
+                item.get("expectedPaymentDate"),
+                item.get("lastAcquittanceDate"),
+                item.get("unpaid"),
+                item.get("paid"),
+                item.get("status"),
+                item.get("conciliated"),
+                item.get("totalNetValue"),
+                item.get("valueComposition", {}).get("grossValue"),
+                item.get("valueComposition", {}).get("interest"),
+                item.get("valueComposition", {}).get("fine"),
+                item.get("valueComposition", {}).get("netValue"),
+                item.get("valueComposition", {}).get("discount"),
+                item.get("valueComposition", {}).get("fee"),
+                item.get("financialAccount", {}).get("id"),
+                item.get("financialAccount", {}).get("type"),
+                item.get("financialEvent", {}).get("id"),
+                item.get("financialEvent", {}).get("type"),
+                item.get("financialEvent", {}).get("competenceDate"),
+                item.get("financialEvent", {}).get("value"),
+                item.get("financialEvent", {}).get("description"),
+                item.get("financialEvent", {}).get("categoryDescriptions"),
+            ))
         page += 1
-    return all_items
 
-# Normalização dos dados
-def normalize_data(raw_data):
-    return pd.json_normalize(raw_data)
+    return all_data
 
-# Criação da tabela no banco
-def create_table(engine):
-    with engine.connect() as conn:
-        conn.execute(text(f"""
-            CREATE TABLE IF NOT EXISTS {TABLE_NAME} (
-                id TEXT PRIMARY KEY,
-                version TEXT,
-                index INTEGER,
-                note TEXT,
-                description TEXT,
-                dueDate DATE,
-                expectedPaymentDate DATE,
-                lastAcquittanceDate DATE,
-                unpaid BOOLEAN,
-                paid BOOLEAN,
-                status TEXT,
-                reference TEXT,
-                conciliated BOOLEAN,
-                totalNetValue NUMERIC,
-                renegotiation BOOLEAN,
-                loss BOOLEAN,
-                attachment BOOLEAN,
-                recurrent BOOLEAN,
-                chargeRequest TEXT,
-                paymentRequest TEXT,
-                valueComposition_grossValue NUMERIC,
-                valueComposition_interest NUMERIC,
-                valueComposition_fine NUMERIC,
-                valueComposition_netValue NUMERIC,
-                valueComposition_discount NUMERIC,
-                valueComposition_fee NUMERIC,
-                financialAccount_id TEXT,
-                financialAccount_type TEXT,
-                financialAccount_contaAzulDigital BOOLEAN,
-                financialAccount_cashierAccount TEXT,
-                financialEvent_type TEXT,
-                financialEvent_competenceDate DATE,
-                financialEvent_value NUMERIC,
-                financialEvent_id TEXT,
-                financialEvent_negotiator_id TEXT,
-                financialEvent_negotiator_name TEXT,
-                financialEvent_description TEXT,
-                financialEvent_categoryCount INTEGER,
-                financialEvent_costCenterCount INTEGER,
-                financialEvent_reference_id TEXT,
-                financialEvent_reference_origin TEXT,
-                financialEvent_reference_revision TEXT,
-                financialEvent_numberOfInstallments INTEGER,
-                financialEvent_scheduled BOOLEAN,
-                financialEvent_version TEXT,
-                financialEvent_recurrenceIndex INTEGER,
-                financialEvent_categoryDescriptions TEXT,
-                hasDigitalReceipt BOOLEAN,
-                authorizedBankSlipId TEXT,
-                acquittanceScheduled TEXT
-            )
-        """))
-        conn.commit()
+# Limpa a tabela antes de inserir
+cur.execute("DELETE FROM installments;")
+conn.commit()
 
-# Execução principal
-def main():
-    print("🔄 Buscando dados da API...")
-    raw_data = get_data()
-    print(f"✅ {len(raw_data)} registros obtidos.")
+# Insere os dados no banco
+data = fetch_all_installments()
+execute_values(cur, """
+    INSERT INTO installments (
+        id, version, idx, description, due_date, expected_payment_date, last_acquittance_date,
+        unpaid, paid, status, conciliated, total_net_value, gross_value, interest, fine,
+        net_value, discount, fee, financial_account_id, financial_account_type,
+        financial_event_id, financial_event_type, financial_event_date, financial_event_value,
+        financial_event_description, category_descriptions
+    ) VALUES %s
+""", data)
 
-    print("🧼 Normalizando os dados...")
-    df = normalize_data(raw_data)
+conn.commit()
+cur.close()
+conn.close()
 
-    print("🔗 Conectando ao banco de dados...")
-    engine = create_engine(DB_URL)
-
-    print("🧱 Criando tabela (se necessário)...")
-    create_table(engine)
-
-    print("🗑️ Limpando a tabela...")
-    with engine.begin() as conn:
-        conn.execute(text(f"DELETE FROM {TABLE_NAME}"))
-
-    print("📥 Inserindo dados...")
-    df.to_sql(TABLE_NAME, engine, if_exists='append', index=False, method='multi')
-
-    print("🏁 Processo concluído com sucesso!")
-
-if __name__ == "__main__":
-    main()
+print(f"{len(data)} registros inseridos com sucesso.")
