@@ -95,8 +95,8 @@ def main():
     token = get_access_token()
     centros = buscar_centros_de_custo(token)
 
-    data_inicio = datetime.date(2025, 1, 1)
-    data_fim = datetime.date(2030, 1, 1)
+    data_inicio = datetime.date(2019, 1, 1)
+    data_fim = datetime.date(2020, 1, 1)
 
     while data_inicio < data_fim:
         inicio = data_inicio.strftime("%Y-%m-%d")
