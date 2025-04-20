@@ -2,11 +2,15 @@ import requests
 import pandas as pd
 from sqlalchemy import create_engine, text
 
-# Configurações
+# Configurações da API
+API_KEY = "00e3b816-f844-49ee-a75e-3da30f1c2630"
+COOKIE = "cookiesession1=678A3E1D66C7D55F62E048F18AB33C36"
 BASE_URL = "https://services.contaazul.com"
+ENDPOINT = "finance-pro-reader/v1/installment-view"
 HEADERS = {
-    "X-Authorization": "00e3b816-f844-49ee-a75e-3da30f1c2630",
-    "Content-Type": "application/json"
+    "X-Authorization": API_KEY,
+    "Content-Type": "application/json",
+    "Cookie": COOKIE
 }
 POST_DATA = {
     "quickFilter": "ALL",
@@ -14,33 +18,30 @@ POST_DATA = {
     "type": "REVENUE"
 }
 
+# Banco de dados
 DB_URL = "postgresql://neondb_owner:npg_4IFToxrYbnp8@ep-noisy-morning-ackra3m4-pooler.sa-east-1.aws.neon.tech/neondb?sslmode=require"
 TABLE_NAME = "contaazul_receitas"
 
-# Função para buscar dados paginados
+# Requisição paginada
 def get_data():
     all_items = []
     page = 1
     while True:
-        response = requests.post(
-            f"{BASE_URL}/finance-pro-reader/v1/installment-view?page={page}&page_size=1000",
-            headers=HEADERS,
-            json=POST_DATA
-        )
+        url = f"{BASE_URL}/{ENDPOINT}?page={page}&page_size=1000"
+        response = requests.post(url, headers=HEADERS, json=POST_DATA)
         response.raise_for_status()
-        data = response.json().get("items", [])
-        if not data:
+        items = response.json().get("items", [])
+        if not items:
             break
-        all_items.extend(data)
+        all_items.extend(items)
         page += 1
     return all_items
 
-# Função para normalizar dados em DataFrame
+# Normalização dos dados
 def normalize_data(raw_data):
-    df = pd.json_normalize(raw_data)
-    return df
+    return pd.json_normalize(raw_data)
 
-# Função para criar tabela no PostgreSQL
+# Criação da tabela
 def create_table(engine):
     with engine.connect() as conn:
         conn.execute(text(f"""
@@ -99,7 +100,7 @@ def create_table(engine):
         """))
         conn.commit()
 
-# Função principal
+# Principal
 def main():
     print("🔄 Buscando dados da API...")
     raw_data = get_data()
