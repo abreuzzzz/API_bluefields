@@ -1,32 +1,37 @@
 import requests
 import pandas as pd
+import json
 from sqlalchemy import create_engine, text
 
 # Configurações da API
 API_KEY = "00e3b816-f844-49ee-a75e-3da30f1c2630"
+COOKIE = "cookiesession1=678A3E1D66C7D55F62E048F18AB33C36"
 BASE_URL = "https://services.contaazul.com"
 ENDPOINT = "finance-pro-reader/v1/installment-view"
 HEADERS = {
     "X-Authorization": API_KEY,
-    "Content-Type": "application/json"
+    "Content-Type": "application/json",
+    "Cookie": COOKIE
 }
-POST_DATA = {
+
+# Payload corrigido
+payload = json.dumps({
     "quickFilter": "ALL",
     "search": "",
     "type": "REVENUE"
-}
+})
 
 # Banco de dados
 DB_URL = "postgresql://neondb_owner:npg_4IFToxrYbnp8@ep-noisy-morning-ackra3m4-pooler.sa-east-1.aws.neon.tech/neondb?sslmode=require"
 TABLE_NAME = "contaazul_receitas"
 
-# Requisição paginada
+# Função para buscar dados paginados
 def get_data():
     all_items = []
     page = 1
     while True:
         url = f"{BASE_URL}/{ENDPOINT}?page={page}&page_size=1000"
-        response = requests.post(url, headers=HEADERS, json=POST_DATA)
+        response = requests.post(url, headers=HEADERS, data=payload)
         response.raise_for_status()
         items = response.json().get("items", [])
         if not items:
@@ -39,7 +44,7 @@ def get_data():
 def normalize_data(raw_data):
     return pd.json_normalize(raw_data)
 
-# Criação da tabela
+# Criação da tabela no banco
 def create_table(engine):
     with engine.connect() as conn:
         conn.execute(text(f"""
@@ -98,7 +103,7 @@ def create_table(engine):
         """))
         conn.commit()
 
-# Principal
+# Execução principal
 def main():
     print("🔄 Buscando dados da API...")
     raw_data = get_data()
