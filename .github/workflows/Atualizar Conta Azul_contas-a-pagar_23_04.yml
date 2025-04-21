@@ -1,0 +1,28 @@
+name: Atualizar Conta Azul_contas-a-pagar_23_04
+
+on:
+  schedule:
+    - cron: '50 3 * * *'  # todos os dias às 04:00 UTC
+  workflow_dispatch:
+
+jobs:
+  run-script:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Instalar dependências
+        run: pip install -r requirements.txt
+
+      - name: Rodar script
+        env:
+          REFRESH_TOKEN: ${{ secrets.REFRESH_TOKEN }}
+          DB_URL: ${{ secrets.DB_URL }}
+        run: |
+          python contas-a-pagar_23_04.py

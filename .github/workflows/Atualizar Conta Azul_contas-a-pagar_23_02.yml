@@ -1,4 +1,4 @@
-name: Atualizar Conta Azul_contas-a-pagar_23
+name: Atualizar Conta Azul_contas-a-pagar_23_02
 
 on:
   schedule:
@@ -25,4 +25,4 @@ jobs:
           REFRESH_TOKEN: ${{ secrets.REFRESH_TOKEN }}
           DB_URL: ${{ secrets.DB_URL }}
         run: |
-          python contas-a-pagar_23.py
+          python contas-a-pagar_23_02.py
