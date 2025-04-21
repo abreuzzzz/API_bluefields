@@ -2,7 +2,7 @@ name: Atualizar Conta Azul_contas-a-pagar_28
 
 on:
   schedule:
-    - cron: '40 4 * * *'  # todos os dias às 04:00 UTC
+    - cron: '40 4 * * 0'  # todos os dias às 04:00 UTC
   workflow_dispatch:
 
 jobs:
