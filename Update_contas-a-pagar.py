@@ -20,6 +20,6 @@ for arquivo in arquivos:
         print(f"✔️ Finalizado com sucesso: {arquivo}")
     except subprocess.CalledProcessError as e:
         print(f"❌ Erro ao executar {arquivo}: {e}")
-    time.sleep(10)
+    time.sleep(60)
 
 print("\nTodos os scripts foram processados.")
