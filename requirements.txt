@@ -3,3 +3,4 @@ psycopg2-binary
 python-dateutil
 pandas
 sqlalchemy
+pydrive2
