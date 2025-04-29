@@ -6,85 +6,100 @@ from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 
-# Autenticação com Google Drive
-json_secret = os.getenv("GDRIVE_SERVICE_ACCOUNT")
-service_account_info = json.loads(json_secret)
-credentials = service_account.Credentials.from_service_account_info(
-    service_account_info,
-    scopes=['https://www.googleapis.com/auth/drive']
-)
-drive_service = build('drive', 'v3', credentials=credentials)
+# Configurações
+API_KEY = "00e3b816-f844-49ee-a75e-3da30f1c2630"
+PASTA_ID = "1_kJtBN_cr_WpND1nF3WtI5smi3LfIxNy"
+JSON_SECRET_PATH = os.getenv("GDRIVE_SERVICE_ACCOUNT")
+CSV_PATH = "Financeiro_contas_a_pagar_Bluefields.csv"
 
-# Headers e colunas da API do Conta Azul
+# Cabeçalhos e colunas esperadas
 headers = {
-    "X-Authorization": "00e3b816-f844-49ee-a75e-3da30f1c2630",
+    "X-Authorization": API_KEY,
     "Content-Type": "application/json"
 }
-
 colunas_base = [
-    "id", "description", "dueDate", "expectedPaymentDate", "lastAcquittanceDate",
-    "unpaid", "paid", "status", "financialEvent.id",
-    "financialEvent.categoryDescriptions", "financialEvent.negotiator.id",
+    "id",
+    "description",
+    "dueDate",
+    "expectedPaymentDate",
+    "lastAcquittanceDate",
+    "unpaid",
+    "paid",
+    "status",
+    "financialEvent.id",
+    "financialEvent.categoryDescriptions",
+    "financialEvent.negotiator.id",
     "financialEvent.negotiator.name"
 ]
 
-# Coleta dos dados paginados
-all_data = []
-page = 1
-page_size = 1000
+# Coletar todos os dados paginados da API
+def coletar_dados():
+    page = 1
+    page_size = 1000
+    all_data = []
 
-while True:
-    url = f"https://services.contaazul.com/finance-pro-reader/v1/installment-view?page={page}&page_size={page_size}"
-    payload = json.dumps({
-  "quickFilter": "ALL",
-  "search": "",
-  "type": "EXPENSE"
-})
-    response = requests.post(url, headers=headers, json=payload)
-    response.raise_for_status()
-    data = response.json()
-    entries = data.get("items", [])
+    while True:
+        url = f"https://services.contaazul.com/finance-pro-reader/v1/installment-view?page={page}&page_size={page_size}"
+        payload = {
+            "quickFilter": "ALL",
+            "search": "",
+            "type": "EXPENSE"
+        }
+        res = requests.post(url, headers=headers, json=payload)
+        res.raise_for_status()
+        data = res.json()
 
-    if not entries:
-        break
+        items = data.get("items", [])
+        if not items:
+            break
 
-    all_data.extend(entries)
-    page += 1
+        all_data.extend(items)
+        page += 1
 
-# Tratamento dos dados
-saida_list = []
-for entry in all_data:
-    flat_entry = pd.json_normalize(entry)
-    # Preencher colunas ausentes
-    for col in colunas_base:
-        if col not in flat_entry.columns:
-            flat_entry[col] = None
-    saida_list.append(flat_entry[colunas_base])
+    return all_data
 
-df = pd.concat(saida_list, ignore_index=True)
+# Normalizar dados em DataFrame
+def normalizar_dados(dados):
+    registros = []
+    for item in dados:
+        flat = pd.json_normalize(item)
+        for col in colunas_base:
+            if col not in flat.columns:
+                flat[col] = None
+        registros.append(flat[colunas_base])
+    df = pd.concat(registros, ignore_index=True)
+    return df
 
-# Salvar arquivo local temporário
-local_path = "/tmp/Financeiro_contas_a_pagar_Bluefields.csv"
-df.to_csv(local_path, index=False)
+# Upload para o Google Drive com substituição
+def upload_para_drive(caminho_csv, nome_arquivo, pasta_id):
+    # Autenticação com conta de serviço
+    creds = service_account.Credentials.from_service_account_file(
+        JSON_SECRET_PATH,
+        scopes=['https://www.googleapis.com/auth/drive']
+    )
+    service = build('drive', 'v3', credentials=creds)
 
-# Procurar por arquivos antigos com o mesmo nome na pasta
-PASTA_ID = "1_kJtBN_cr_WpND1nF3WtI5smi3LfIxNy"
-nome_arquivo = "Financeiro_contas_a_pagar_Bluefields.csv"
+    # Verifica se o arquivo já existe na pasta
+    query = f"name = '{nome_arquivo}' and '{pasta_id}' in parents and trashed = false"
+    results = service.files().list(q=query, fields="files(id, name)").execute()
+    arquivos = results.get('files', [])
 
-query = f"'{PASTA_ID}' in parents and name = '{nome_arquivo}' and trashed = false"
-result = drive_service.files().list(q=query, fields="files(id, name)").execute()
-files = result.get("files", [])
+    # Se existir, remove
+    for arquivo in arquivos:
+        service.files().delete(fileId=arquivo['id']).execute()
 
-# Se já existir, excluir
-for file in files:
-    drive_service.files().delete(fileId=file["id"]).execute()
+    # Upload do novo arquivo
+    file_metadata = {
+        'name': nome_arquivo,
+        'parents': [pasta_id]
+    }
+    media = MediaFileUpload(caminho_csv, mimetype='text/csv')
+    service.files().create(body=file_metadata, media_body=media, fields='id').execute()
 
-# Upload do novo arquivo
-media = MediaFileUpload(local_path, mimetype='text/csv')
-file_metadata = {
-    'name': nome_arquivo,
-    'parents': [PASTA_ID]
-}
-drive_service.files().create(body=file_metadata, media_body=media, fields='id').execute()
-
-print(f"Arquivo CSV atualizado com sucesso no Google Drive: {nome_arquivo}")
+# Executa o processo completo
+if __name__ == "__main__":
+    dados = coletar_dados()
+    df = normalizar_dados(dados)
+    df.to_csv(CSV_PATH, index=False)
+    upload_para_drive(CSV_PATH, "Financeiro_contas_a_pagar_Bluefields.csv", PASTA_ID)
+    print(f"Arquivo CSV salvo e enviado para o Google Drive: {CSV_PATH}")
