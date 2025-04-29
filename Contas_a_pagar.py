@@ -1,4 +1,5 @@
 import requests
+import json
 
 url = 'https://services.contaazul.com/finance-pro-reader/v1/installment-view?page=1&page_size=10'
 
@@ -7,13 +8,13 @@ headers = {
     'Content-Type': 'application/json',
 }
 
-payload = {
-    "quickFilter": "ALL",
-    "search": "",
-    "type": "EXPENSE"
-}
+payload = json.dumps({
+  "quickFilter": "ALL",
+  "search": "",
+  "type": "EXPENSE"
+})
 
-response = requests.post(url, headers=headers, json=payload)
+response = requests.request("POST", url, headers=headers, data=payload)
 
 print(response.status_code)
 print(response.json())  # ou response.text se quiser ver o JSON bruto
