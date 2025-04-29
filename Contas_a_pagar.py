@@ -45,7 +45,7 @@ def coletar_dados():
             "search": "",
             "type": "EXPENSE"
         }
-        res = requests.post(url, headers=headers, json=payload)
+        res = requests.post(url, headers=headers, data=payload)
         res.raise_for_status()
         data = res.json()
 
