@@ -1,8 +1,7 @@
-import requests
+import http.client
 import json
 
-url = "https://services.contaazul.com/finance-pro-reader/v1/installment-view?page=1&page_size=1000"
-
+conn = http.client.HTTPSConnection("services.contaazul.com")
 payload = json.dumps({
   "quickFilter": "ALL",
   "search": "",
@@ -11,9 +10,8 @@ payload = json.dumps({
 headers = {
   'X-Authorization': '00e3b816-f844-49ee-a75e-3da30f1c2630',
   'Content-Type': 'application/json',
-  'User-Agent': 'Mozilla/5.0'
 }
-
-response = requests.request("POST", url, headers=headers, data=payload)
-
-print(response.text)
+conn.request("POST", "/finance-pro-reader/v1/installment-view?page=1&page_size=10", payload, headers)
+res = conn.getresponse()
+data = res.read()
+print(data.decode("utf-8"))
