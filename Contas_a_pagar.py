@@ -80,16 +80,18 @@ query = f"name='Financeiro_contas_a_pagar_Bluefields.csv' and '{folder_id}' in p
 results = drive_service.files().list(q=query, spaces='drive', fields="files(id, name)").execute()
 files = results.get('files', [])
 
-# Se já existir, excluir
-for file in files:
-    drive_service.files().delete(fileId=file['id']).execute()
-
-# Upload novo arquivo
-file_metadata = {
-    "name": "Financeiro_contas_a_pagar_Bluefields.csv",
-    "parents": [folder_id]
-}
 media = MediaFileUpload(local_csv_path, mimetype="text/csv")
-upload = drive_service.files().create(body=file_metadata, media_body=media, fields="id").execute()
+
+if files:
+    # Atualiza o arquivo existente
+    file_id = files[0]['id']
+    updated = drive_service.files().update(fileId=file_id, media_body=media).execute()
+else:
+    # Cria novo arquivo se não existir
+    file_metadata = {
+        "name": "Financeiro_contas_a_pagar_Bluefields.csv",
+        "parents": [folder_id]
+    }
+    upload = drive_service.files().create(body=file_metadata, media_body=media, fields="id").execute()
 
 print("✅ Arquivo CSV salvo com sucesso no Google Drive.")
