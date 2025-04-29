@@ -35,7 +35,11 @@ page_size = 1000
 
 while True:
     url = f"https://services.contaazul.com/finance-pro-reader/v1/installment-view?page={page}&page_size={page_size}"
-    payload = {"quickFilter": "ALL", "search": "", "type": "EXPENSE"}
+    payload = json.dumps({
+  "quickFilter": "ALL",
+  "search": "",
+  "type": "EXPENSE"
+})
     response = requests.post(url, headers=headers, json=payload)
     response.raise_for_status()
     data = response.json()
