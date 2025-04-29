@@ -1,20 +1,36 @@
 import requests
 import json
+import os
 
-url = "https://services.contaazul.com/finance-pro-reader/v1/installment-view?page=1&page_size=10"
+url = "https://services.contaazul.com/finance-pro-reader/v1/installment-view?page=1&page_size=1000"
 
 payload = json.dumps({
-  "quickFilter": "ALL",
-  "search": "",
-  "type": "EXPENSE"
+    "quickFilter": "ALL",
+    "search": "",
+    "type": "EXPENSE"
 })
+
 headers = {
-  'X-Authorization': '00e3b816-f844-49ee-a75e-3da30f1c2630',
-  'Content-Type': 'application/json',
-  'Cookie': 'cookiesession1=678A3E1D6BB9CA2800C408D89D27B509',
-  'User-Agent': 'Mozilla/5.0'
+    'X-Authorization': '00e3b816-f844-49ee-a75e-3da30f1c2630',
+    'Content-Type': 'application/json',
+    'User-Agent': 'Mozilla/5.0'
 }
 
-response = requests.request("POST", url, headers=headers, data=payload)
+print("Enviando requisição para:", url)
+print("Headers:", headers)
+print("Payload:", payload)
 
-print(response.text)
+try:
+    response = requests.request("POST", url, headers=headers, data=payload, timeout=30)
+
+    print("Status Code:", response.status_code)
+    print("Response Headers:", response.headers)
+    print("Response Text:", response.text)
+
+    if response.status_code != 200:
+        print("Erro ao chamar a API da Conta Azul.")
+        exit(1)
+
+except Exception as e:
+    print("Erro durante a requisição:", e)
+    exit(1)
