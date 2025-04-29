@@ -6,6 +6,7 @@ import json
 from dateutil.relativedelta import relativedelta
 from pydrive2.auth import GoogleAuth
 from pydrive2.drive import GoogleDrive
+from oauth2client.service_account import ServiceAccountCredentials
 
 # -------- CONFIGURAÇÕES --------
 CLIENT_ID = "42e1bhrsoon4q4li2mrbgdgae7"
@@ -30,15 +31,12 @@ def get_access_token():
 
 # -------- GOOGLE DRIVE --------
 def autenticar_drive_service_account(json_secret):
-    with open("service_account.json", "w") as f:
-        f.write(json_secret)
-
     gauth = GoogleAuth()
-    gauth.settings["client_config_backend"] = "service"
-    gauth.settings["service_config"] = {
-        "client_service_account_json_file_path": "service_account.json"
-    }
-    gauth.ServiceAuth()
+    credentials_dict = json.loads(json_secret)
+    scope = ["https://www.googleapis.com/auth/drive"]
+
+    credentials = ServiceAccountCredentials.from_json_keyfile_dict(credentials_dict, scope)
+    gauth.credentials = credentials
     return GoogleDrive(gauth)
 
 def baixar_csv_drive(drive, filename, folder_id):
