@@ -26,4 +26,4 @@ jobs:
       - name: Executar script Python
         env:
           GDRIVE_SERVICE_ACCOUNT: ${{ secrets.GDRIVE_SERVICE_ACCOUNT }}
-        run: python main.py
+        run: python Contas_a_pagar_detalhe.py
