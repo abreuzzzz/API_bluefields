@@ -76,11 +76,18 @@ def extract_fields(item, campos):
         valor = item
         for parte in partes:
             if isinstance(valor, list):
-                valor = [v.get(parte, None) for v in valor]
+                # Se for uma lista de dicts, tenta extrair o campo de cada dict
+                if all(isinstance(v, dict) for v in valor):
+                    valor = [v.get(parte, None) for v in valor]
+                else:
+                    valor = None
             elif isinstance(valor, dict):
                 valor = valor.get(parte, None)
             else:
                 valor = None
+        # Se o valor for uma lista simples, transforma em string separada por |
+        if isinstance(valor, list):
+            valor = '|'.join(map(str, valor))
         flat_item[campo] = valor
     return flat_item
 
