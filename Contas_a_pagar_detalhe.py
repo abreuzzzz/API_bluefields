@@ -55,39 +55,25 @@ headers = {
     'User-Agent': 'Mozilla/5.0'
 }
 
-colunas_detalhadas = [
-    "categoriesRatio.costCentersRatio.costCenterId",
-    "categoriesRatio.costCentersRatio.costCenter",
-    "categoriesRatio.costCentersRatio.value",
-    "categoriesRatio.category",
-    "categoriesRatio.value",
-    "categoriesRatio.categoryId",
-    "paymentCondition.installments.unpaid",
-    "paymentCondition.installments.id",
-    "paymentCondition.installments.paid",
-    "paymentCondition.installments.status",
-    "id"
-]
+# ===================== Função para "achatar" JSON =====================
+def flatten_json(y, parent_key='', sep='.'):
+    items = []
+    if isinstance(y, dict):
+        for k, v in y.items():
+            new_key = f"{parent_key}{sep}{k}" if parent_key else k
+            items.extend(flatten_json(v, new_key, sep=sep).items())
+    elif isinstance(y, list):
+        if all(isinstance(i, dict) for i in y):
+            for idx, item in enumerate(y):
+                items.extend(flatten_json(item, f"{parent_key}[{idx}]", sep=sep).items())
+        else:
+            items.append((parent_key, '|'.join(map(str, y))))
+    else:
+        items.append((parent_key, y))
+    return dict(items)
 
-def extract_fields(item, campos):
-    flat_item = {}
-    for campo in campos:
-        partes = campo.split('.')
-        valor = item
-        for parte in partes:
-            if isinstance(valor, list):
-                if all(isinstance(v, dict) for v in valor):
-                    valor = [v.get(parte, None) for v in valor]
-                else:
-                    valor = None
-            elif isinstance(valor, dict):
-                valor = valor.get(parte, None)
-            else:
-                valor = None
-        if isinstance(valor, list):
-            valor = '|'.join(map(str, valor))
-        flat_item[campo] = valor
-    return flat_item
+def extract_fields(item):
+    return flatten_json(item)
 
 # ===================== Coleta paralela dos detalhes via API =====================
 def fetch_detail(fid):
@@ -95,7 +81,7 @@ def fetch_detail(fid):
     try:
         response = requests.get(url, headers=headers, timeout=10)
         if response.status_code == 200:
-            return extract_fields(response.json(), colunas_detalhadas)
+            return extract_fields(response.json())
         else:
             print(f"❌ Erro no ID {fid}: {response.status_code}")
     except Exception as e:
