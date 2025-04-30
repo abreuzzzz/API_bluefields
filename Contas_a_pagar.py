@@ -4,22 +4,23 @@ import pandas as pd
 import requests
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
-from googleapiclient.http import MediaFileUpload
 
-# Autenticar com o Google Drive
+# ===================== Autenticar com Google APIs =====================
 json_secret = os.getenv("GDRIVE_SERVICE_ACCOUNT")
 credentials_info = json.loads(json_secret)
-credentials = service_account.Credentials.from_service_account_info(credentials_info, scopes=["https://www.googleapis.com/auth/drive"])
+scopes = ["https://www.googleapis.com/auth/drive", "https://www.googleapis.com/auth/spreadsheets"]
+credentials = service_account.Credentials.from_service_account_info(credentials_info, scopes=scopes)
 drive_service = build("drive", "v3", credentials=credentials)
+sheets_service = build("sheets", "v4", credentials=credentials)
 
-# Headers da API Conta Azul
+# ===================== Headers da API Conta Azul =====================
 headers = {
     'X-Authorization': '00e3b816-f844-49ee-a75e-3da30f1c2630',
     'Content-Type': 'application/json',
     'User-Agent': 'Mozilla/5.0'
 }
 
-# Colunas a serem extraídas
+# ===================== Colunas a serem extraídas =====================
 colunas_base = [
     "id",
     "description",
@@ -35,7 +36,7 @@ colunas_base = [
     "financialEvent.negotiator.name"
 ]
 
-# Coleta paginada
+# ===================== Coleta paginada da API =====================
 page = 1
 page_size = 1000
 all_items = []
@@ -43,12 +44,12 @@ all_items = []
 while True:
     url = f"https://services.contaazul.com/finance-pro-reader/v1/installment-view?page={page}&page_size={page_size}"
     payload = json.dumps({
-    "quickFilter": "ALL",
-    "search": "",
-    "type": "EXPENSE"
-})
+        "quickFilter": "ALL",
+        "search": "",
+        "type": "EXPENSE"
+    })
 
-    response = requests.request("POST", url, headers=headers, data=payload)
+    response = requests.post(url, headers=headers, data=payload)
     data = response.json()
     items = data.get("items", [])
     if not items:
@@ -56,7 +57,7 @@ while True:
     all_items.extend(items)
     page += 1
 
-# Normalização dos dados
+# ===================== Normalização dos dados =====================
 def extract_fields(item, campos):
     flat_item = {}
     for campo in campos:
@@ -70,28 +71,32 @@ def extract_fields(item, campos):
 dados_formatados = [extract_fields(item, colunas_base) for item in all_items]
 df = pd.DataFrame(dados_formatados)
 
-# Salvar como CSV local
-local_csv_path = "/tmp/Financeiro_contas_a_pagar_Bluefields.csv"
-df.to_csv(local_csv_path, index=False)
-
-# Verifica se o arquivo já existe no Drive
+# ===================== Buscar ID da planilha no Google Drive =====================
 folder_id = "1_kJtBN_cr_WpND1nF3WtI5smi3LfIxNy"
-query = f"name='Financeiro_contas_a_pagar_Bluefields.csv' and '{folder_id}' in parents and trashed=false"
+sheet_name = "Financeiro_contas_a_pagar_Bluefields"
+
+query = f"name='{sheet_name}' and mimeType='application/vnd.google-apps.spreadsheet' and '{folder_id}' in parents and trashed=false"
 results = drive_service.files().list(q=query, spaces='drive', fields="files(id, name)").execute()
-files = results.get('files', [])
+files = results.get("files", [])
 
-media = MediaFileUpload(local_csv_path, mimetype="text/csv")
+if not files:
+    raise Exception(f"Planilha '{sheet_name}' não encontrada na pasta do Drive.")
 
-if files:
-    # Atualiza o arquivo existente
-    file_id = files[0]['id']
-    updated = drive_service.files().update(fileId=file_id, media_body=media).execute()
-else:
-    # Cria novo arquivo se não existir
-    file_metadata = {
-        "name": "Financeiro_contas_a_pagar_Bluefields.csv",
-        "parents": [folder_id]
-    }
-    upload = drive_service.files().create(body=file_metadata, media_body=media, fields="id").execute()
+spreadsheet_id = files[0]['id']
 
-print("✅ Arquivo CSV salvo com sucesso no Google Drive.")
+# ===================== Limpar conteúdo anterior da planilha =====================
+sheets_service.spreadsheets().values().clear(
+    spreadsheetId=spreadsheet_id,
+    range="A:Z"
+).execute()
+
+# ===================== Atualizar dados na planilha =====================
+values = [df.columns.tolist()] + df.fillna("").values.tolist()
+sheets_service.spreadsheets().values().update(
+    spreadsheetId=spreadsheet_id,
+    range="A1",
+    valueInputOption="RAW",
+    body={"values": values}
+).execute()
+
+print("✅ Planilha Google atualizada com sucesso.")
