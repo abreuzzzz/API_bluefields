@@ -2,12 +2,13 @@ import os
 import json
 import pandas as pd
 import requests
-from googleapiclient.http import MediaIoBaseDownload
-from google.oauth2 import service_account
-from googleapiclient.discovery import build
 import io
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from googleapiclient.discovery import build
+from google.oauth2 import service_account
+from googleapiclient.http import MediaIoBaseDownload
 
-# Autenticar com o Google
+# ===================== Autenticação Google =====================
 json_secret = os.getenv("GDRIVE_SERVICE_ACCOUNT")
 credentials_info = json.loads(json_secret)
 credentials = service_account.Credentials.from_service_account_info(
@@ -18,42 +19,37 @@ credentials = service_account.Credentials.from_service_account_info(
 drive_service = build("drive", "v3", credentials=credentials)
 sheets_service = build("sheets", "v4", credentials=credentials)
 
-# Localizar ID da planilha "Detalhe_centro_pagamento"
-sheet_name = "Detalhe_centro_pagamento"
+# ===================== Buscar arquivos no Drive =====================
 folder_id = "1_kJtBN_cr_WpND1nF3WtI5smi3LfIxNy"
-query = f"name='{sheet_name}' and mimeType='application/vnd.google-apps.spreadsheet' and '{folder_id}' in parents and trashed=false"
-result = drive_service.files().list(q=query, spaces="drive", fields="files(id, name)").execute()
-files = result.get("files", [])
-
-if not files:
-    raise FileNotFoundError(f"Planilha {sheet_name} não encontrada na pasta especificada.")
-sheet_id = files[0]["id"]
-
-# Baixar CSV base
+sheet_name = "Detalhe_centro_pagamento"
 input_filename = "Financeiro_contas_a_pagar_Bluefields.csv"
-query = f"name='{input_filename}' and '{folder_id}' in parents and trashed=false"
-result = drive_service.files().list(q=query, spaces="drive", fields="files(id, name)").execute()
-files = result.get("files", [])
-if not files:
-    raise FileNotFoundError(f"Arquivo {input_filename} não encontrado no Drive.")
-file_id = files[0]["id"]
-request = drive_service.files().get_media(fileId=file_id)
+
+def get_file_id(name):
+    query = f"name='{name}' and '{folder_id}' in parents and trashed=false"
+    result = drive_service.files().list(q=query, spaces="drive", fields="files(id, name)").execute()
+    files = result.get("files", [])
+    if not files:
+        raise FileNotFoundError(f"Arquivo '{name}' não encontrado na pasta especificada.")
+    return files[0]["id"]
+
+sheet_id = get_file_id(sheet_name)
+csv_file_id = get_file_id(input_filename)
+
+# ===================== Download do CSV diretamente para o Pandas =====================
+request = drive_service.files().get_media(fileId=csv_file_id)
 fh = io.BytesIO()
 downloader = MediaIoBaseDownload(fh, request)
-done = False
-while not done:
+while True:
     status, done = downloader.next_chunk()
+    if done:
+        break
 fh.seek(0)
-with open(f"/tmp/{input_filename}", "wb") as f:
-    f.write(fh.read())
-
-print(f"📥 Arquivo {input_filename} baixado com sucesso.")
-
-# Ler CSV base
-df_base = pd.read_csv(f"/tmp/{input_filename}")
+df_base = pd.read_csv(fh)
 ids = df_base["financialEvent.id"].dropna().unique()
 
-# Headers da API Conta Azul
+print(f"📥 CSV carregado com {len(ids)} IDs únicos.")
+
+# ===================== Configuração da API Conta Azul =====================
 headers = {
     'X-Authorization': '00e3b816-f844-49ee-a75e-3da30f1c2630',
     'User-Agent': 'Mozilla/5.0'
@@ -93,29 +89,37 @@ def extract_fields(item, campos):
         flat_item[campo] = valor
     return flat_item
 
-# Requisições GET para cada ID
-todos_detalhes = []
-for i, fid in enumerate(ids, 1):
-    print(f"🔍 Buscando detalhe {i}/{len(ids)}: ID {fid}")
+# ===================== Coleta paralela dos detalhes via API =====================
+def fetch_detail(fid):
     url = f"https://services.contaazul.com/contaazul-bff/finance/v1/financial-events/{fid}/summary"
-    response = requests.get(url, headers=headers)
-    if response.status_code == 200:
-        data = response.json()
-        detalhes = extract_fields(data, colunas_detalhadas)
-        todos_detalhes.append(detalhes)
-    else:
-        print(f"❌ Erro no ID {fid}: {response.status_code}")
+    try:
+        response = requests.get(url, headers=headers, timeout=10)
+        if response.status_code == 200:
+            return extract_fields(response.json(), colunas_detalhadas)
+        else:
+            print(f"❌ Erro no ID {fid}: {response.status_code}")
+    except Exception as e:
+        print(f"⚠️ Falha no ID {fid}: {e}")
+    return None
 
-# Criar DataFrame
+print("🚀 Iniciando requisições paralelas...")
+
+with ThreadPoolExecutor(max_workers=10) as executor:
+    futures = [executor.submit(fetch_detail, fid) for fid in ids]
+    todos_detalhes = [f.result() for f in as_completed(futures) if f.result()]
+
+print(f"✅ Coleta finalizada com {len(todos_detalhes)} registros.")
+
+# ===================== Enviar dados ao Google Sheets =====================
 df_detalhes = pd.DataFrame(todos_detalhes)
 
 # Limpar conteúdo anterior da planilha
-clear_request = sheets_service.spreadsheets().values().clear(
+sheets_service.spreadsheets().values().clear(
     spreadsheetId=sheet_id,
-    range="A:Z"  # Limpa as colunas necessárias
+    range="A:Z"
 ).execute()
 
-# Enviar os dados para a planilha
+# Enviar os dados
 values = [df_detalhes.columns.tolist()] + df_detalhes.fillna("").values.tolist()
 sheets_service.spreadsheets().values().update(
     spreadsheetId=sheet_id,
@@ -124,4 +128,4 @@ sheets_service.spreadsheets().values().update(
     body={"values": values}
 ).execute()
 
-print("✅ Dados atualizados na planilha Google Sheets com sucesso.")
+print("📊 Dados atualizados na planilha com sucesso.")
