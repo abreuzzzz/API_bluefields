@@ -118,7 +118,8 @@ query = f"name='{output_filename}' and '{folder_id}' in parents and trashed=fals
 result = drive_service.files().list(q=query, spaces="drive", fields="files(id, name)").execute()
 files = result.get("files", [])
 
-media = MediaFileUpload(output_path, mimetype="text/csv")
+media = MediaFileUpload(output_path, mimetype="text/csv", resumable=True, chunksize=256 * 1024)
+
 
 if files:
     file_id = files[0]['id']
