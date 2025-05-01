@@ -19,8 +19,8 @@ sheets_service = build("sheets", "v4", credentials=credentials)
 
 # ===================== Buscar arquivos no Drive =====================
 folder_id = "1_kJtBN_cr_WpND1nF3WtI5smi3LfIxNy"
-sheet_input_name = "Financeiro_contas_a_pagar_Bluefields"
-sheet_output_name = "Detalhe_centro_pagamento"
+sheet_input_name = "Financeiro_contas_a_receber_Bluefields"
+sheet_output_name = "Detalhe_centro_recebimento"
 
 def get_file_id(name):
     query = f"name='{name}' and '{folder_id}' in parents and trashed=false"
