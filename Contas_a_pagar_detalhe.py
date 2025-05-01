@@ -2,52 +2,53 @@ import os
 import json
 import pandas as pd
 import requests
-import io
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from googleapiclient.discovery import build
 from google.oauth2 import service_account
-from googleapiclient.http import MediaIoBaseDownload
 
 # ===================== Autenticação Google =====================
 json_secret = os.getenv("GDRIVE_SERVICE_ACCOUNT")
 credentials_info = json.loads(json_secret)
 credentials = service_account.Credentials.from_service_account_info(
     credentials_info,
-    scopes=["https://www.googleapis.com/auth/drive", "https://www.googleapis.com/auth/spreadsheets"]
+    scopes=["https://www.googleapis.com/auth/spreadsheets"]
 )
 
-drive_service = build("drive", "v3", credentials=credentials)
 sheets_service = build("sheets", "v4", credentials=credentials)
 
-# ===================== Buscar arquivos no Drive =====================
-folder_id = "1_kJtBN_cr_WpND1nF3WtI5smi3LfIxNy"
-sheet_name = "Detalhe_centro_pagamento"
-input_filename = "Financeiro_contas_a_pagar_Bluefields.csv"
+# ===================== IDs e nomes =====================
+spreadsheet_name = "Financeiro_contas_a_pagar_Bluefields"
+input_sheet = "Financeiro_contas_a_pagar_Bluefields"
+output_sheet = "Detalhe_centro_pagamento"
 
-def get_file_id(name):
-    query = f"name='{name}' and '{folder_id}' in parents and trashed=false"
-    result = drive_service.files().list(q=query, spaces="drive", fields="files(id, name)").execute()
+# ===================== Buscar ID da planilha =====================
+def get_spreadsheet_id(name):
+    drive = build("drive", "v3", credentials=credentials)
+    query = f"name='{name}' and trashed=false and mimeType='application/vnd.google-apps.spreadsheet'"
+    result = drive.files().list(q=query, spaces="drive", fields="files(id, name)").execute()
     files = result.get("files", [])
     if not files:
-        raise FileNotFoundError(f"Arquivo '{name}' não encontrado na pasta especificada.")
+        raise FileNotFoundError(f"Planilha '{name}' não encontrada.")
     return files[0]["id"]
 
-sheet_id = get_file_id(sheet_name)
-csv_file_id = get_file_id(input_filename)
+sheet_id = get_spreadsheet_id(spreadsheet_name)
 
-# ===================== Download do CSV diretamente para o Pandas =====================
-request = drive_service.files().get_media(fileId=csv_file_id)
-fh = io.BytesIO()
-downloader = MediaIoBaseDownload(fh, request)
-while True:
-    status, done = downloader.next_chunk()
-    if done:
-        break
-fh.seek(0)
-df_base = pd.read_csv(fh)
+# ===================== Ler os IDs do Google Sheets =====================
+def read_sheet_data(sheet_id, tab_name):
+    result = sheets_service.spreadsheets().values().get(
+        spreadsheetId=sheet_id,
+        range=tab_name
+    ).execute()
+    values = result.get("values", [])
+    if not values:
+        return pd.DataFrame()
+    headers = values[0]
+    rows = values[1:]
+    return pd.DataFrame(rows, columns=headers)
+
+df_base = read_sheet_data(sheet_id, input_sheet)
 ids = df_base["financialEvent.id"].dropna().unique()
-
-print(f"📥 CSV carregado com {len(ids)} IDs únicos.")
+print(f"📥 Planilha carregada com {len(ids)} IDs únicos.")
 
 # ===================== Configuração da API Conta Azul =====================
 headers = {
@@ -121,16 +122,16 @@ df_detalhes = pd.DataFrame(todos_detalhes)
 # Limpar conteúdo anterior da planilha
 sheets_service.spreadsheets().values().clear(
     spreadsheetId=sheet_id,
-    range="A:Z"
+    range=f"{output_sheet}!A:Z"
 ).execute()
 
 # Enviar os dados
 values = [df_detalhes.columns.tolist()] + df_detalhes.fillna("").values.tolist()
 sheets_service.spreadsheets().values().update(
     spreadsheetId=sheet_id,
-    range="A1",
+    range=f"{output_sheet}!A1",
     valueInputOption="RAW",
     body={"values": values}
 ).execute()
 
-print("📊 Dados atualizados na planilha com sucesso.")
+print("📊 Dados atualizados na aba 'Detalhe_centro_pagamento' com sucesso.")
