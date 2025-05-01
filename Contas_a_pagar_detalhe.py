@@ -55,17 +55,38 @@ headers = {
     'User-Agent': 'Mozilla/5.0'
 }
 
-# ===================== Função para extrair costCentersRatio =====================
+# ===================== Função para extrair dados =====================
 def extract_fields(item):
     resultado = []
-    base_id = item.get("id")
-    cost_centers = item.get("costCentersRatio", [])
+    base = {
+        "id": item.get("id"),
+        "description": item.get("description"),
+        "type": item.get("type"),
+        "competenceDate": item.get("competenceDate"),
+        "value": item.get("value"),
+        "observation": item.get("observation"),
+        "negotiator.name": item.get("negotiator", {}).get("name"),
+        "negotiator.legalDocument": item.get("negotiator", {}).get("legalDocument")
+    }
 
-    for centro in cost_centers:
-        linha = {"id": base_id}
-        for k, v in centro.items():
-            linha[f"costCentersRatio.{k}"] = v
-        resultado.append(linha)
+    categorias = item.get("categoriesRatio", [])
+    for categoria in categorias:
+        categoria_base = base.copy()
+        categoria_base.update({
+            "category.negative": categoria.get("negative"),
+            "category.grossValue": categoria.get("grossValue"),
+            "category.operationType": categoria.get("operationType"),
+            "category.type": categoria.get("type"),
+            "category.category": categoria.get("category"),
+            "category.value": categoria.get("value"),
+            "category.categoryId": categoria.get("categoryId")
+        })
+
+        for centro in categoria.get("costCentersRatio", []):
+            linha = categoria_base.copy()
+            for k, v in centro.items():
+                linha[f"costCentersRatio.{k}"] = v
+            resultado.append(linha)
 
     return resultado
 
