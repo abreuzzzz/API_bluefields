@@ -11,43 +11,39 @@ json_secret = os.getenv("GDRIVE_SERVICE_ACCOUNT")
 credentials_info = json.loads(json_secret)
 credentials = service_account.Credentials.from_service_account_info(
     credentials_info,
-    scopes=["https://www.googleapis.com/auth/spreadsheets"]
+    scopes=["https://www.googleapis.com/auth/drive", "https://www.googleapis.com/auth/spreadsheets"]
 )
 
+drive_service = build("drive", "v3", credentials=credentials)
 sheets_service = build("sheets", "v4", credentials=credentials)
 
-# ===================== IDs e nomes =====================
-spreadsheet_name = "Financeiro_contas_a_pagar_Bluefields"
-input_sheet = "Financeiro_contas_a_pagar_Bluefields"
-output_sheet = "Detalhe_centro_pagamento"
+# ===================== Buscar arquivos no Drive =====================
+folder_id = "1_kJtBN_cr_WpND1nF3WtI5smi3LfIxNy"
+sheet_input_name = "Financeiro_contas_a_pagar_Bluefields"
+sheet_output_name = "Detalhe_centro_pagamento"
 
-# ===================== Buscar ID da planilha =====================
-def get_spreadsheet_id(name):
-    drive = build("drive", "v3", credentials=credentials)
-    query = f"name='{name}' and trashed=false and mimeType='application/vnd.google-apps.spreadsheet'"
-    result = drive.files().list(q=query, spaces="drive", fields="files(id, name)").execute()
+def get_file_id(name):
+    query = f"name='{name}' and '{folder_id}' in parents and trashed=false"
+    result = drive_service.files().list(q=query, spaces="drive", fields="files(id, name)").execute()
     files = result.get("files", [])
     if not files:
-        raise FileNotFoundError(f"Planilha '{name}' não encontrada.")
+        raise FileNotFoundError(f"Arquivo '{name}' não encontrado na pasta especificada.")
     return files[0]["id"]
 
-sheet_id = get_spreadsheet_id(spreadsheet_name)
+input_sheet_id = get_file_id(sheet_input_name)
+output_sheet_id = get_file_id(sheet_output_name)
 
-# ===================== Ler os IDs do Google Sheets =====================
-def read_sheet_data(sheet_id, tab_name):
-    result = sheets_service.spreadsheets().values().get(
-        spreadsheetId=sheet_id,
-        range=tab_name
-    ).execute()
-    values = result.get("values", [])
-    if not values:
-        return pd.DataFrame()
-    headers = values[0]
-    rows = values[1:]
-    return pd.DataFrame(rows, columns=headers)
+# ===================== Leitura do Google Sheets diretamente para o Pandas =====================
+sheet_range = "A:Z"
+result = sheets_service.spreadsheets().values().get(
+    spreadsheetId=input_sheet_id,
+    range=sheet_range
+).execute()
 
-df_base = read_sheet_data(sheet_id, input_sheet)
+values = result.get('values', [])
+df_base = pd.DataFrame(values[1:], columns=values[0])
 ids = df_base["financialEvent.id"].dropna().unique()
+
 print(f"📥 Planilha carregada com {len(ids)} IDs únicos.")
 
 # ===================== Configuração da API Conta Azul =====================
@@ -56,38 +52,22 @@ headers = {
     'User-Agent': 'Mozilla/5.0'
 }
 
-# ===================== Função para extrair dados =====================
+# ===================== Função para extrair todos os campos aninhados =====================
 def extract_fields(item):
     resultado = []
-    base = {
-        "id": item.get("id"),
-        "description": item.get("description"),
-        "type": item.get("type"),
-        "competenceDate": item.get("competenceDate"),
-        "value": item.get("value"),
-        "observation": item.get("observation"),
-        "negotiator.name": item.get("negotiator", {}).get("name"),
-        "negotiator.legalDocument": item.get("negotiator", {}).get("legalDocument")
-    }
+    base_id = item.get("id")
+    categories = item.get("categoriesRatio", [])
 
-    categorias = item.get("categoriesRatio", [])
-    for categoria in categorias:
-        categoria_base = base.copy()
-        categoria_base.update({
-            "category.negative": categoria.get("negative"),
-            "category.grossValue": categoria.get("grossValue"),
-            "category.operationType": categoria.get("operationType"),
-            "category.type": categoria.get("type"),
-            "category.category": categoria.get("category"),
-            "category.value": categoria.get("value"),
-            "category.categoryId": categoria.get("categoryId")
-        })
-
-        for centro in categoria.get("costCentersRatio", []):
-            linha = categoria_base.copy()
-            for k, v in centro.items():
-                linha[f"costCentersRatio.{k}"] = v
-            resultado.append(linha)
+    for cat in categories:
+        linha = {"id": base_id}
+        for k, v in cat.items():
+            if k == "costCentersRatio":
+                for i, centro in enumerate(v):
+                    for ck, cv in centro.items():
+                        linha[f"categoriesRatio.costCentersRatio.{i}.{ck}"] = cv
+            else:
+                linha[f"categoriesRatio.{k}"] = v
+        resultado.append(linha)
 
     return resultado
 
@@ -121,17 +101,17 @@ df_detalhes = pd.DataFrame(todos_detalhes)
 
 # Limpar conteúdo anterior da planilha
 sheets_service.spreadsheets().values().clear(
-    spreadsheetId=sheet_id,
-    range=f"{output_sheet}!A:Z"
+    spreadsheetId=output_sheet_id,
+    range="A:Z"
 ).execute()
 
 # Enviar os dados
-values = [df_detalhes.columns.tolist()] + df_detalhes.fillna("").values.tolist()
+values = [df_detalhes.columns.tolist()] + df_detalhes.fillna("").astype(str).values.tolist()
 sheets_service.spreadsheets().values().update(
-    spreadsheetId=sheet_id,
-    range=f"{output_sheet}!A1",
+    spreadsheetId=output_sheet_id,
+    range="A1",
     valueInputOption="RAW",
     body={"values": values}
 ).execute()
 
-print("📊 Dados atualizados na aba 'Detalhe_centro_pagamento' com sucesso.")
+print("📊 Dados atualizados na planilha com sucesso.")
