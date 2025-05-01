@@ -1,4 +1,4 @@
-name: Atualizar Conta Azul_contas-a-pagar
+name: Atualizar Conta Azul_contas-a-receber
 
 on:
   schedule:
