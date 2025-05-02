@@ -7,7 +7,7 @@ import subprocess
 caminho_scripts = "./"  # ajuste aqui se estiverem em outro diretório
 
 # Lista todos os arquivos com o padrão especificado
-arquivos = glob.glob(os.path.join(caminho_scripts, "contas-a-receber_25*.py"))
+arquivos = glob.glob(os.path.join(caminho_scripts, "A*.py"))
 
 # Ordena os arquivos em ordem alfabética (funciona para nomes padronizados como os seus)
 arquivos.sort()
@@ -20,6 +20,6 @@ for arquivo in arquivos:
         print(f"✔️ Finalizado com sucesso: {arquivo}")
     except subprocess.CalledProcessError as e:
         print(f"❌ Erro ao executar {arquivo}: {e}")
-    time.sleep(60)
+    time.sleep(10)
 
 print("\nTodos os scripts foram processados.")
