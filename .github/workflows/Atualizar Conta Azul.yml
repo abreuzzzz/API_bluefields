@@ -24,5 +24,6 @@ jobs:
         env:
           REFRESH_TOKEN: ${{ secrets.REFRESH_TOKEN }}
           DB_URL: ${{ secrets.DB_URL }}
+          GDRIVE_SERVICE_ACCOUNT: ${{ secrets.GDRIVE_SERVICE_ACCOUNT }}
         run: |
           python Update_contas.py
