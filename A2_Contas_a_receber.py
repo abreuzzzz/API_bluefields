@@ -31,6 +31,7 @@ colunas_base = [
     "paid",
     "status",
     "financialEvent.id",
+    "financialEvent.competenceDate",
     "financialEvent.categoryDescriptions",
     "financialEvent.negotiator.id",
     "financialEvent.negotiator.name"
