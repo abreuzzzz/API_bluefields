@@ -178,7 +178,7 @@ creds = Credentials.from_service_account_info(creds_dict, scopes=["https://www.g
 
 # Acessar a planilha
 gc = gspread.authorize(creds)
-spreadsheet = gc.open_by_key("1jsZRht1ENIfamTMyZcQFm-V-HybkwpAxU8BRHav_zWs")
+spreadsheet = gc.open_by_key("1L6eJ5ux2OkdUTB8CCYUkKGxn76oVx92zqDRLcf-2wCM")
 worksheet = spreadsheet.get_worksheet(0)  # primeira aba
 
 # Limpar todo o conteúdo anterior
