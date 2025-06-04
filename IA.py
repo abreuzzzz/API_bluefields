@@ -35,12 +35,17 @@ df['paid'] = limpar_valores(df['paid'])
 df['categoriesRatio.value'] = limpar_valores(df['categoriesRatio.value'])
 
 # Converter coluna de data
-df['financialEvent.competenceDate'] = pd.to_datetime(df['financialEvent.competenceDate'])
+df['lastAcquittanceDate'] = pd.to_datetime(df['lastAcquittanceDate'])
 df['lastAcquittanceDate'] = pd.to_datetime(df['lastAcquittanceDate'], errors='coerce')
 
+# Filtrar apenas registros do ano corrente
+ano_corrente = datetime.today().year
+df = df[df['lastAcquittanceDate'].dt.year == ano_corrente]
+
+
 # Criar colunas auxiliares
-df['AnoMes'] = df['financialEvent.competenceDate'].dt.to_period('M')
-df['Trimestre'] = df['financialEvent.competenceDate'].dt.to_period('Q')
+df['AnoMes'] = df['lastAcquittanceDate'].dt.to_period('M')
+df['Trimestre'] = df['lastAcquittanceDate'].dt.to_period('Q')
 df['AnoMes_Caixa'] = df['lastAcquittanceDate'].dt.to_period('M')
 df['Trimestre_Caixa'] = df['lastAcquittanceDate'].dt.to_period('Q')
 
@@ -103,7 +108,7 @@ rentabilidade['lucro'] = rentabilidade['categoriesRatio.value_receita'] - rentab
 rentabilidade['margem_lucro'] = rentabilidade['lucro'] / rentabilidade['categoriesRatio.value_receita'].replace(0, pd.NA)
 
 # Pendências e vencidos
-df_pendentes = df[(df['unpaid'] > 0) & (df['financialEvent.competenceDate'] <= hoje)]
+df_pendentes = df[(df['unpaid'] > 0) & (df['lastAcquittanceDate'] <= hoje)]
 pendentes_por_tipo = df_pendentes.groupby('tipo')['unpaid'].sum().to_dict()
 
 # Inadimplência
