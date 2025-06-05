@@ -35,14 +35,21 @@ df['paid'] = limpar_valores(df['paid'])
 df['categoriesRatio.value'] = limpar_valores(df['categoriesRatio.value'])
 
 # Converter coluna de data
-df['lastAcquittanceDate'] = pd.to_datetime(df['lastAcquittanceDate'])
-df['lastAcquittanceDate'] = pd.to_datetime(df['lastAcquittanceDate'], errors='coerce')
-df['dueDate'] = pd.to_datetime(df['dueDate'], errors='coerce')
+# Conversão de datas com parsing manual para evitar problemas de formatação
+def parse_data_segura(coluna):
+    datas = pd.to_datetime(
+        coluna.apply(lambda x: '-'.join(x.split('-')[:3]) if isinstance(x, str) and '-' in x else None),
+        format='%Y-%m-%d',
+        errors='coerce'
+    )
+    return datas
+
+df['lastAcquittanceDate'] = parse_data_segura(df['lastAcquittanceDate'])
+df['dueDate'] = parse_data_segura(df['dueDate'])
 
 # Filtrar apenas registros do ano corrente
 ano_corrente = datetime.today().year
 df = df[df['lastAcquittanceDate'].dt.year == ano_corrente]
-df = df[df['dueDate'].dt.year == ano_corrente]
 
 
 # Criar colunas auxiliares
