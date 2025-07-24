@@ -22,7 +22,7 @@ jobs:
 
       - name: Rodar script
         env:
-          REFRESH_TOKEN: ${{ secrets.REFRESH_TOKEN }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
           DB_URL: ${{ secrets.DB_URL }}
           GDRIVE_SERVICE_ACCOUNT: ${{ secrets.GDRIVE_SERVICE_ACCOUNT }}
         run: |
