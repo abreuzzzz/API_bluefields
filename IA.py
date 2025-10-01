@@ -8,7 +8,6 @@ from gspread_dataframe import set_with_dataframe
 from oauth2client.service_account import ServiceAccountCredentials
 from google.oauth2.service_account import Credentials
 
-# Configurar sua API Key do OpenAI
 deepseek_api_key = os.getenv("DEEPSEEK_API_KEY")
 client = OpenAI(api_key=deepseek_api_key, base_url="https://api.deepseek.com")
 
@@ -52,7 +51,6 @@ df['dueDate'] = parse_data_segura(df['dueDate'])
 ano_corrente = datetime.today().year
 df = df[df['lastAcquittanceDate'].dt.year == ano_corrente]
 
-
 # Criar colunas auxiliares
 df['AnoMes'] = df['lastAcquittanceDate'].dt.to_period('M')
 df['Trimestre'] = df['lastAcquittanceDate'].dt.to_period('Q')
@@ -68,12 +66,8 @@ variacao_mensal_pct = resumo_mensal_categoria.pct_change().fillna(0)
 categorias_com_alta = (variacao_mensal_pct > 0.3).apply(lambda row: row[row > 0.3].to_dict(), axis=1).to_dict()
 
 # Valores totais
-total_recebido = df[
-    (df['tipo'] == 'Receita') & (df['status'] == 'ACQUITTED')
-]['categoriesRatio.value'].sum()
-total_pago = df[
-    (df['tipo'] == 'Despesa') & (df['status'] == 'ACQUITTED')
-]['categoriesRatio.value'].sum()
+total_recebido = df[df['tipo'] == 'Receita']['categoriesRatio.value'].sum()
+total_pago = df[df['tipo'] == 'Despesa']['categoriesRatio.value'].sum()
 total_pendente_despesa = df[
     (df['tipo'] == 'Despesa') & (df['status'] == 'OVERDUE')
 ]['categoriesRatio.value'].sum()
@@ -209,4 +203,4 @@ for bloco in blocos:
         dados.append([titulo, resultado])
 
 # Escrever na planilha
-worksheet.update("A1", dados)
+worksheet.update(dados, "A1")
