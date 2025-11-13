@@ -6,6 +6,8 @@ from datetime import datetime, timedelta
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
 
 # ===================== Autenticar com Google APIs =====================
 json_secret = os.getenv("GDRIVE_SERVICE_ACCOUNT")
@@ -39,6 +41,10 @@ colunas_base = [
     "financialEvent.negotiator.name",
     "categoriesRatio.costCentersRatio.0.costCenter"
 ]
+
+# Lock para sincronizar prints e contadores
+print_lock = threading.Lock()
+progress_counter = {'current': 0, 'total': 0}
 
 # ===================== Função para buscar centros de custo =====================
 def buscar_centros_custo():
@@ -105,8 +111,6 @@ def fazer_requisicao_com_retry(url, headers, payload, max_wait=300):
             
             # Se sucesso, retorna a resposta
             if response.status_code == 200:
-                if tentativa > 1:
-                    print(f"  ✅ Requisição bem-sucedida após {tentativa} tentativas!")
                 return response
             
             # Se erro 429 (rate limit), aplica backoff
@@ -116,39 +120,31 @@ def fazer_requisicao_com_retry(url, headers, payload, max_wait=300):
                 
                 if retry_after:
                     wait_time = min(int(retry_after), max_wait)
-                    print(f"  ⏳ Rate limit (tentativa {tentativa}). Aguardando {wait_time}s (Retry-After)")
                 else:
                     # Backoff exponencial: min(2^tentativa, max_wait)
                     wait_time = min((2 ** min(tentativa, 10)), max_wait)
-                    print(f"  ⏳ Rate limit (tentativa {tentativa}). Aguardando {wait_time}s")
                 
                 time.sleep(wait_time)
                 continue
             
             # Outros erros HTTP (500, 503, etc.)
             else:
-                print(f"  ⚠️ Erro HTTP {response.status_code} (tentativa {tentativa})")
                 wait_time = min((2 ** min(tentativa, 10)), max_wait)
-                print(f"  ⏳ Aguardando {wait_time}s antes de tentar novamente...")
                 time.sleep(wait_time)
                 continue
                 
         except requests.exceptions.Timeout:
-            print(f"  ⏱️ Timeout na requisição (tentativa {tentativa})")
             wait_time = min((2 ** min(tentativa, 10)), max_wait)
-            print(f"  ⏳ Aguardando {wait_time}s antes de tentar novamente...")
             time.sleep(wait_time)
             continue
             
         except requests.exceptions.RequestException as e:
-            print(f"  ⚠️ Erro na requisição (tentativa {tentativa}): {e}")
             wait_time = min((2 ** min(tentativa, 10)), max_wait)
-            print(f"  ⏳ Aguardando {wait_time}s antes de tentar novamente...")
             time.sleep(wait_time)
             continue
 
 # ===================== Função para coletar dados de um período e centro de custo =====================
-def coletar_dados_periodo_centro_custo(periodo, cost_center_id, max_pages=20, delay_entre_requisicoes=0.5):
+def coletar_dados_periodo_centro_custo(periodo, cost_center_id, max_pages=20, delay_entre_requisicoes=0.3):
     """Coleta dados paginados para um período e centro de custo específico com rate limiting"""
     page = 1
     page_size = 100
@@ -176,10 +172,52 @@ def coletar_dados_periodo_centro_custo(periodo, cost_center_id, max_pages=20, de
         items_periodo.extend(items)
         page += 1
         
-        # Delay entre requisições para evitar rate limit
+        # Delay reduzido para compensar paralelização
         time.sleep(delay_entre_requisicoes)
     
     return items_periodo
+
+# ===================== Função para processar um centro de custo completo =====================
+def processar_centro_custo(cost_center, periodos, idx_cc, total_cost_centers):
+    """Processa todos os períodos de um centro de custo"""
+    cc_id = cost_center["id"]
+    cc_name = cost_center["name"]
+    
+    with print_lock:
+        print(f"\n{'='*80}")
+        print(f"🏢 CENTRO DE CUSTO {idx_cc}/{total_cost_centers}: {cc_name} (ID: {cc_id})")
+        print(f"{'='*80}")
+    
+    items_centro_custo = []
+    
+    for idx_periodo, periodo in enumerate(periodos, 1):
+        with print_lock:
+            progress_counter['current'] += 1
+            print(f"🔍 [{progress_counter['current']}/{progress_counter['total']}] {cc_name} - Período {idx_periodo}/{len(periodos)}: {periodo['dueDateFrom']} a {periodo['dueDateTo']}")
+        
+        items_periodo = coletar_dados_periodo_centro_custo(periodo, cc_id)
+        
+        # Adicionar o nome do centro de custo em cada item
+        for item in items_periodo:
+            if "categoriesRatio" not in item:
+                item["categoriesRatio"] = {}
+            if "costCentersRatio" not in item["categoriesRatio"]:
+                item["categoriesRatio"]["costCentersRatio"] = [{}]
+            if not item["categoriesRatio"]["costCentersRatio"]:
+                item["categoriesRatio"]["costCentersRatio"] = [{}]
+            
+            item["categoriesRatio"]["costCentersRatio"][0]["costCenter"] = cc_name
+        
+        items_centro_custo.extend(items_periodo)
+        
+        if items_periodo:
+            with print_lock:
+                print(f"  📄 {len(items_periodo)} registros coletados | Total deste centro: {len(items_centro_custo)}")
+    
+    with print_lock:
+        print(f"✅ Centro '{cc_name}' finalizado: {len(items_centro_custo)} registros")
+    
+    return items_centro_custo
 
 # ===================== Buscar centros de custo =====================
 cost_centers = buscar_centros_custo()
@@ -195,48 +233,44 @@ print(f"\n🔄 Gerando períodos de 15 dias entre {data_inicio.date()} e {data_f
 periodos = gerar_periodos(data_inicio, data_fim)
 print(f"📊 Total de períodos a processar: {len(periodos)}")
 print(f"🏢 Total de centros de custo a processar: {len(cost_centers)}")
-print(f"🔢 Total de combinações (períodos × centros): {len(periodos) * len(cost_centers)}\n")
+print(f"🔢 Total de combinações (períodos × centros): {len(periodos) * len(cost_centers)}")
+
+# Configurar contador de progresso
+progress_counter['total'] = len(periodos) * len(cost_centers)
+
+# ===================== Processar centros de custo em paralelo =====================
+# Ajuste max_workers conforme necessário (5-10 é geralmente seguro para APIs)
+MAX_WORKERS = 5
+
+print(f"\n🚀 Iniciando processamento paralelo com {MAX_WORKERS} workers...\n")
 
 all_items = []
-total_periodos = len(periodos)
-total_cost_centers = len(cost_centers)
-combinacao_atual = 0
-total_combinacoes = total_periodos * total_cost_centers
+start_time = time.time()
 
-for idx_cc, cost_center in enumerate(cost_centers, 1):
-    cc_id = cost_center["id"]
-    cc_name = cost_center["name"]
+with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+    # Submeter todas as tarefas
+    futures = {
+        executor.submit(processar_centro_custo, cc, periodos, idx, len(cost_centers)): cc
+        for idx, cc in enumerate(cost_centers, 1)
+    }
     
-    print(f"\n{'='*80}")
-    print(f"🏢 CENTRO DE CUSTO {idx_cc}/{total_cost_centers}: {cc_name} (ID: {cc_id})")
-    print(f"{'='*80}")
-    
-    for idx_periodo, periodo in enumerate(periodos, 1):
-        combinacao_atual += 1
-        print(f"\n🔍 [{combinacao_atual}/{total_combinacoes}] Período {idx_periodo}/{total_periodos}: {periodo['dueDateFrom']} a {periodo['dueDateTo']}")
-        
-        items_periodo = coletar_dados_periodo_centro_custo(periodo, cc_id)
-        
-        # Adicionar o nome do centro de custo em cada item
-        for item in items_periodo:
-            # Adicionar campo para o nome do centro de custo
-            if "categoriesRatio" not in item:
-                item["categoriesRatio"] = {}
-            if "costCentersRatio" not in item["categoriesRatio"]:
-                item["categoriesRatio"]["costCentersRatio"] = [{}]
-            if not item["categoriesRatio"]["costCentersRatio"]:
-                item["categoriesRatio"]["costCentersRatio"] = [{}]
-            
-            item["categoriesRatio"]["costCentersRatio"][0]["costCenter"] = cc_name
-        
-        all_items.extend(items_periodo)
-        
-        if items_periodo:
-            print(f"  📄 {len(items_periodo)} registros coletados")
-        print(f"  ✅ Total acumulado geral: {len(all_items)} registros")
+    # Processar resultados conforme completam
+    for future in as_completed(futures):
+        cost_center = futures[future]
+        try:
+            items = future.result()
+            all_items.extend(items)
+            with print_lock:
+                print(f"\n📦 Total acumulado geral: {len(all_items)} registros")
+        except Exception as exc:
+            with print_lock:
+                print(f"❌ Erro ao processar {cost_center['name']}: {exc}")
+
+elapsed_time = time.time() - start_time
 
 print(f"\n{'='*80}")
 print(f"✅ Coleta finalizada! Total de registros: {len(all_items)}")
+print(f"⏱️  Tempo total: {elapsed_time:.2f} segundos ({elapsed_time/60:.2f} minutos)")
 print(f"{'='*80}\n")
 
 # ===================== Normalização dos dados =====================
@@ -295,3 +329,4 @@ sheets_service.spreadsheets().values().update(
 
 print(f"\n✅ Planilha Google '{sheet_name}' atualizada com sucesso!")
 print(f"📊 Total de registros: {len(df)}")
+print(f"⚡ Velocidade: {len(df)/elapsed_time:.2f} registros/segundo")
