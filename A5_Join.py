@@ -20,8 +20,6 @@ client = gspread.authorize(creds)
 planilhas_ids = {
     "Financeiro_contas_a_receber_Bluefields": "1IkG2bG2qwfUPIRwE-igQ-gbsH5B3vmlH_ButiOoorAM",
     "Financeiro_contas_a_pagar_Bluefields": "1As4IarqpWofUxl6g4X0TRuBMIgP-uJEFkWDIqqFcZBY",
-    "Detalhe_centro_pagamento": "10Go9m1OmjuJyv7GMnAS0mTt8SiwVMnzEQxpMqWAi9oI",
-    "Detalhe_centro_recebimento": "1I-wwL4psrN45_AncTxDydgm9ZkmTjtHXvEem6dXck2U",
     "Financeiro_Completo_Bluefields": "1sBKeD9Bgwy59xAJzetF1gVDShrnCocQnuYB2CRtutPk"
 }
 
@@ -32,62 +30,54 @@ def ler_planilha_por_id(nome_arquivo):
     df = get_as_dataframe(aba).dropna(how="all")
     return df
 
-# Lê os dados das planilhas
+# Lê os dados das planilhas principais
+print("📥 Lendo planilhas de contas a receber e contas a pagar...")
 df_receber = ler_planilha_por_id("Financeiro_contas_a_receber_Bluefields")
 df_pagar = ler_planilha_por_id("Financeiro_contas_a_pagar_Bluefields")
-df_pagamento = ler_planilha_por_id("Detalhe_centro_pagamento")
-df_recebimento = ler_planilha_por_id("Detalhe_centro_recebimento")
 
 # Adiciona a coluna tipo
 df_receber["tipo"] = "Receita"
 df_pagar["tipo"] = "Despesa"
 
 # Junta os dois dataframes
+print("🔗 Consolidando dados de receitas e despesas...")
 df_completo = pd.concat([df_receber, df_pagar], ignore_index=True)
 
-# 1º join com Detalhe_centro_pagamento usando financialEvent.id
-df_merge = df_completo.merge(
-    df_pagamento,
-    how="left",
-    left_on="financialEvent.id",
-    right_on="id",
-    suffixes=('', '_detalhe_pagamento')
-)
-
-# Filtra os que ainda não foram encontrados (onde campos de detalhe estão nulos)
-nao_encontrados = df_merge[df_merge['id_detalhe_pagamento'].isna()].copy()
-
-# 2º join com Detalhe_centro_recebimento usando financialEvent.id
-df_enriquecido = nao_encontrados.drop(columns=[col for col in df_pagamento.columns if col != 'id'])
-df_enriquecido = df_enriquecido.merge(
-    df_recebimento,
-    how='left',
-    left_on="financialEvent.id",
-    right_on="id",
-    suffixes=('', '_detalhe_recebimento')
-)
-
-# Atualiza as linhas originais com os detalhes de recebimento
-df_merge.update(df_enriquecido)
-
 # Remove linhas com competenceDate maior que hoje
-if 'financialEvent.competenceDate' in df_merge.columns:
-    df_merge['financialEvent.competenceDate'] = pd.to_datetime(df_merge['financialEvent.competenceDate'], errors='coerce')
-    df_merge = df_merge[df_merge['financialEvent.competenceDate'] <= datetime.today()]
+if 'financialEvent.competenceDate' in df_completo.columns:
+    print("📅 Filtrando registros por data de competência...")
+    df_completo['financialEvent.competenceDate'] = pd.to_datetime(
+        df_completo['financialEvent.competenceDate'], 
+        errors='coerce'
+    )
+    df_completo = df_completo[df_completo['financialEvent.competenceDate'] <= datetime.today()]
 
 # Corrige valores da coluna categoriesRatio.value com base na condição
-if 'categoriesRatio.value' in df_merge.columns and 'paid' in df_merge.columns:
-    df_merge['categoriesRatio.value'] = df_merge.apply(
+if 'categoriesRatio.value' in df_completo.columns and 'paid' in df_completo.columns:
+    print("💰 Corrigindo valores de categoriesRatio.value...")
+    df_completo['categoriesRatio.value'] = df_completo.apply(
         lambda row: row['paid'] if pd.notna(row['categoriesRatio.value']) and pd.notna(row['paid']) and row['categoriesRatio.value'] > row['paid'] else row['categoriesRatio.value'],
         axis=1
     )
 
+# Estatísticas finais
+print(f"\n📊 Resumo dos dados processados:")
+print(f"  Total de registros: {len(df_completo)}")
+if 'tipo' in df_completo.columns:
+    print(f"  Receitas: {len(df_completo[df_completo['tipo'] == 'Receita'])}")
+    print(f"  Despesas: {len(df_completo[df_completo['tipo'] == 'Despesa'])}")
+if 'categoriesRatio.costCentersRatio.0.costCenter' in df_completo.columns:
+    centros_custo = df_completo['categoriesRatio.costCentersRatio.0.costCenter'].nunique()
+    print(f"  Centros de custo únicos: {centros_custo}")
+
 # 📄 Abrir a planilha de saída
+print("\n📤 Atualizando planilha consolidada...")
 planilha_saida = client.open_by_key(planilhas_ids["Financeiro_Completo_Bluefields"])
 aba_saida = planilha_saida.sheet1
 
 # Limpa a aba e sobrescreve
 aba_saida.clear()
-set_with_dataframe(aba_saida, df_merge)
+set_with_dataframe(aba_saida, df_completo)
 
-print("✅ Planilha sobrescrita com sucesso.")
+print("✅ Planilha consolidada atualizada com sucesso!")
+print(f"📋 Total de colunas exportadas: {len(df_completo.columns)}")
