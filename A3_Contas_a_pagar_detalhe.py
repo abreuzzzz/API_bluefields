@@ -2,6 +2,7 @@ import os
 import json
 import pandas as pd
 import requests
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from googleapiclient.discovery import build
 from google.oauth2 import service_account
@@ -50,6 +51,76 @@ headers = {
     'User-Agent': 'Mozilla/5.0'
 }
 
+# ===================== Função para fazer requisição com retry infinito =====================
+def fazer_requisicao_com_retry(url, headers, max_wait=300):
+    """
+    Faz requisição GET com retry infinito e backoff exponencial crescente.
+    
+    Args:
+        url: URL da requisição
+        headers: Headers HTTP
+        max_wait: Tempo máximo de espera em segundos (padrão 300s = 5 min)
+    
+    Returns:
+        response: Resposta da requisição bem-sucedida ou None se falhar definitivamente
+    """
+    tentativa = 0
+    
+    while True:  # Loop infinito até conseguir
+        tentativa += 1
+        
+        try:
+            response = requests.get(url, headers=headers, timeout=30)
+            
+            # Se sucesso, retorna a resposta
+            if response.status_code == 200:
+                if tentativa > 1:
+                    print(f"  ✅ Requisição bem-sucedida após {tentativa} tentativas!")
+                return response
+            
+            # Se erro 429 (rate limit), aplica backoff
+            elif response.status_code == 429:
+                # Tenta pegar o Retry-After header
+                retry_after = response.headers.get('Retry-After')
+                
+                if retry_after:
+                    wait_time = min(int(retry_after), max_wait)
+                    print(f"  ⏳ Rate limit (tentativa {tentativa}). Aguardando {wait_time}s (Retry-After)")
+                else:
+                    # Backoff exponencial: min(2^tentativa, max_wait)
+                    wait_time = min((2 ** min(tentativa, 10)), max_wait)
+                    print(f"  ⏳ Rate limit (tentativa {tentativa}). Aguardando {wait_time}s")
+                
+                time.sleep(wait_time)
+                continue
+            
+            # Se erro 404, não adianta tentar novamente - recurso não existe
+            elif response.status_code == 404:
+                print(f"  ⚠️ Recurso não encontrado (404) na tentativa {tentativa}")
+                return None
+            
+            # Outros erros HTTP (500, 503, etc.)
+            else:
+                print(f"  ⚠️ Erro HTTP {response.status_code} (tentativa {tentativa})")
+                wait_time = min((2 ** min(tentativa, 10)), max_wait)
+                print(f"  ⏳ Aguardando {wait_time}s antes de tentar novamente...")
+                time.sleep(wait_time)
+                continue
+                
+        except requests.exceptions.Timeout:
+            print(f"  ⏱️ Timeout na requisição (tentativa {tentativa})")
+            wait_time = min((2 ** min(tentativa, 10)), max_wait)
+            print(f"  ⏳ Aguardando {wait_time}s antes de tentar novamente...")
+            time.sleep(wait_time)
+            continue
+            
+        except requests.exceptions.RequestException as e:
+            print(f"  ⚠️ Erro na requisição (tentativa {tentativa}): {e}")
+            wait_time = min((2 ** min(tentativa, 10)), max_wait)
+            print(f"  ⏳ Aguardando {wait_time}s antes de tentar novamente...")
+            time.sleep(wait_time)
+            continue
+
 # = Função para extrair todos os campos aninhados =
 def extract_fields(item):
     resultado = []
@@ -92,18 +163,18 @@ def extract_fields(item):
     
     return resultado
 
-# = Coleta paralela dos detalhes via API =
+# = Coleta paralela dos detalhes via API com retry infinito =
 def fetch_detail(fid):
     url = f"https://services.contaazul.com/contaazul-bff/finance/v1/financial-events/{fid}/summary"
-    try:
-        response = requests.get(url, headers=headers, timeout=10)
-        if response.status_code == 200:
-            return extract_fields(response.json())
-        else:
-            print(f"❌ Erro no ID {fid}: {response.status_code}")
-    except Exception as e:
-        print(f"⚠️ Falha no ID {fid}: {e}")
-    return None
+    
+    # Usa a função de retry infinito
+    response = fazer_requisicao_com_retry(url, headers)
+    
+    if response and response.status_code == 200:
+        return extract_fields(response.json())
+    else:
+        print(f"❌ Falha definitiva no ID {fid}")
+        return None
 
 print("🚀 Iniciando requisições paralelas...")
 todos_detalhes = []
