@@ -55,49 +55,71 @@ def gerar_periodos(data_inicio, data_fim):
     
     return periodos
 
-# ===================== Função para fazer requisição com retry e backoff =====================
-def fazer_requisicao_com_retry(url, headers, payload, max_retries=5):
-    """Faz requisição com retry exponencial e respeita Retry-After header"""
-    for tentativa in range(max_retries):
+# ===================== Função para fazer requisição com retry infinito =====================
+def fazer_requisicao_com_retry(url, headers, payload, max_wait=300):
+    """
+    Faz requisição com retry infinito e backoff exponencial crescente.
+    
+    Args:
+        url: URL da requisição
+        headers: Headers HTTP
+        payload: Corpo da requisição
+        max_wait: Tempo máximo de espera em segundos (padrão 300s = 5 min)
+    
+    Returns:
+        response: Resposta da requisição bem-sucedida
+    """
+    tentativa = 0
+    
+    while True:  # Loop infinito até conseguir
+        tentativa += 1
+        
         try:
-            response = requests.post(url, headers=headers, data=payload)
+            response = requests.post(url, headers=headers, data=payload, timeout=30)
             
             # Se sucesso, retorna a resposta
             if response.status_code == 200:
+                if tentativa > 1:
+                    print(f"  ✅ Requisição bem-sucedida após {tentativa} tentativas!")
                 return response
             
-            # Se erro 429, aplica backoff exponencial
+            # Se erro 429 (rate limit), aplica backoff
             elif response.status_code == 429:
                 # Tenta pegar o Retry-After header
                 retry_after = response.headers.get('Retry-After')
                 
                 if retry_after:
-                    # Se Retry-After está presente, respeita o valor
-                    wait_time = int(retry_after)
-                    print(f"  ⏳ Rate limit atingido. Aguardando {wait_time}s (Retry-After header)")
+                    wait_time = min(int(retry_after), max_wait)
+                    print(f"  ⏳ Rate limit (tentativa {tentativa}). Aguardando {wait_time}s (Retry-After)")
                 else:
-                    # Backoff exponencial: 2^tentativa segundos (com jitter)
-                    wait_time = (2 ** tentativa) + (time.time() % 1)
-                    print(f"  ⏳ Rate limit atingido. Aguardando {wait_time:.1f}s (tentativa {tentativa + 1}/{max_retries})")
+                    # Backoff exponencial: min(2^tentativa, max_wait)
+                    wait_time = min((2 ** min(tentativa, 10)), max_wait)
+                    print(f"  ⏳ Rate limit (tentativa {tentativa}). Aguardando {wait_time}s")
                 
                 time.sleep(wait_time)
                 continue
             
-            # Outros erros HTTP
+            # Outros erros HTTP (500, 503, etc.)
             else:
-                response.raise_for_status()
-                
-        except requests.exceptions.RequestException as e:
-            print(f"  ⚠️ Erro na requisição (tentativa {tentativa + 1}/{max_retries}): {e}")
-            
-            if tentativa < max_retries - 1:
-                wait_time = (2 ** tentativa) + (time.time() % 1)
-                print(f"  ⏳ Aguardando {wait_time:.1f}s antes de tentar novamente...")
+                print(f"  ⚠️ Erro HTTP {response.status_code} (tentativa {tentativa})")
+                wait_time = min((2 ** min(tentativa, 10)), max_wait)
+                print(f"  ⏳ Aguardando {wait_time}s antes de tentar novamente...")
                 time.sleep(wait_time)
-            else:
-                raise
-    
-    raise Exception(f"Falha após {max_retries} tentativas")
+                continue
+                
+        except requests.exceptions.Timeout:
+            print(f"  ⏱️ Timeout na requisição (tentativa {tentativa})")
+            wait_time = min((2 ** min(tentativa, 10)), max_wait)
+            print(f"  ⏳ Aguardando {wait_time}s antes de tentar novamente...")
+            time.sleep(wait_time)
+            continue
+            
+        except requests.exceptions.RequestException as e:
+            print(f"  ⚠️ Erro na requisição (tentativa {tentativa}): {e}")
+            wait_time = min((2 ** min(tentativa, 10)), max_wait)
+            print(f"  ⏳ Aguardando {wait_time}s antes de tentar novamente...")
+            time.sleep(wait_time)
+            continue
 
 # ===================== Função para coletar dados de um período =====================
 def coletar_dados_periodo(periodo, max_pages=20, delay_entre_requisicoes=0.5):
@@ -116,26 +138,21 @@ def coletar_dados_periodo(periodo, max_pages=20, delay_entre_requisicoes=0.5):
             "type": "REVENUE"
         })
         
-        try:
-            # Faz requisição com proteção contra rate limit
-            response = fazer_requisicao_com_retry(url, headers, payload)
-            data = response.json()
-            items = data.get("items", [])
-            
-            if not items:
-                break
-            
-            items_periodo.extend(items)
-            page += 1
-            
-            print(f"  📄 Página {page-1}: {len(items)} registros coletados ({periodo['dueDateFrom']} a {periodo['dueDateTo']})")
-            
-            # Delay entre requisições para evitar rate limit
-            time.sleep(delay_entre_requisicoes)
-            
-        except Exception as e:
-            print(f"  ⚠️ Erro na página {page} do período {periodo['dueDateFrom']} a {periodo['dueDateTo']}: {e}")
+        # Faz requisição com retry infinito - agora sempre vai conseguir
+        response = fazer_requisicao_com_retry(url, headers, payload)
+        data = response.json()
+        items = data.get("items", [])
+        
+        if not items:
             break
+        
+        items_periodo.extend(items)
+        page += 1
+        
+        print(f"  📄 Página {page-1}: {len(items)} registros coletados ({periodo['dueDateFrom']} a {periodo['dueDateTo']})")
+        
+        # Delay entre requisições para evitar rate limit
+        time.sleep(delay_entre_requisicoes)
     
     return items_periodo
 
