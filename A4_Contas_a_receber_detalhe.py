@@ -6,6 +6,8 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from googleapiclient.discovery import build
 from google.oauth2 import service_account
+from threading import Lock
+from datetime import datetime, timedelta
 
 # ===================== Autenticação Google =====================
 json_secret = os.getenv("GDRIVE_SERVICE_ACCOUNT")
@@ -53,75 +55,105 @@ headers = {
     'User-Agent': 'Mozilla/5.0'
 }
 
-# ===================== Função para fazer requisição com retry infinito =====================
-def fazer_requisicao_com_retry(url, headers, max_wait=300):
+# ===================== Rate Limiter Global =====================
+class RateLimiter:
+    """Controla rate limiting global entre todas as threads"""
+    def __init__(self):
+        self.lock = Lock()
+        self.last_request_time = None
+        self.min_interval = 0.1  # Intervalo mínimo entre requisições (100ms)
+        self.rate_limit_until = None
+        self.consecutive_429 = 0
+
+    def wait_if_needed(self):
+        with self.lock:
+            # Se estamos em rate limit, aguardar
+            if self.rate_limit_until and datetime.now() < self.rate_limit_until:
+                wait_time = (self.rate_limit_until - datetime.now()).total_seconds()
+                if wait_time > 0:
+                    print(f"⏸️  Rate limit ativo. Aguardando {wait_time:.1f}s...")
+                    time.sleep(wait_time)
+
+            # Garantir intervalo mínimo entre requisições
+            if self.last_request_time:
+                elapsed = time.time() - self.last_request_time
+                if elapsed < self.min_interval:
+                    time.sleep(self.min_interval - elapsed)
+
+            self.last_request_time = time.time()
+
+    def register_429(self, retry_after=None):
+        """Registra erro 429 e ajusta o rate limiter"""
+        with self.lock:
+            self.consecutive_429 += 1
+
+            if retry_after:
+                wait_seconds = int(retry_after)
+            else:
+                # Backoff exponencial baseado em 429 consecutivos
+                wait_seconds = min(2 ** self.consecutive_429, 60)
+
+            self.rate_limit_until = datetime.now() + timedelta(seconds=wait_seconds)
+            self.min_interval = min(self.min_interval * 1.5, 2.0)  # Aumenta intervalo gradualmente
+
+            print(f"⚠️  Rate limit detectado ({self.consecutive_429}x). Pausando por {wait_seconds}s")
+
+    def register_success(self):
+        """Registra sucesso e reseta contadores"""
+        with self.lock:
+            if self.consecutive_429 > 0:
+                self.consecutive_429 = max(0, self.consecutive_429 - 1)
+                # Reduz intervalo gradualmente após sucessos
+                self.min_interval = max(0.1, self.min_interval * 0.9)
+
+rate_limiter = RateLimiter()
+
+# ===================== Função para fazer requisição otimizada =====================
+def fazer_requisicao_otimizada(url, headers, max_tentativas=10):
     """
-    Faz requisição GET com retry infinito e backoff exponencial crescente.
-    
-    Args:
-        url: URL da requisição
-        headers: Headers HTTP
-        max_wait: Tempo máximo de espera em segundos (padrão 300s = 5 min)
-    
-    Returns:
-        response: Resposta da requisição bem-sucedida ou None se falhar definitivamente
+    Faz requisição com rate limiter global e retry limitado.
     """
-    tentativa = 0
-    
-    while True:  # Loop infinito até conseguir
-        tentativa += 1
-        
+    for tentativa in range(1, max_tentativas + 1):
+        # Aguarda rate limiter global
+        rate_limiter.wait_if_needed()
+
         try:
             response = requests.get(url, headers=headers, timeout=30)
-            
-            # Se sucesso, retorna a resposta
+
             if response.status_code == 200:
-                if tentativa > 1:
-                    print(f"  ✅ Requisição bem-sucedida após {tentativa} tentativas!")
+                rate_limiter.register_success()
                 return response
-            
-            # Se erro 429 (rate limit), aplica backoff
+
             elif response.status_code == 429:
-                # Tenta pegar o Retry-After header
                 retry_after = response.headers.get('Retry-After')
-                
-                if retry_after:
-                    wait_time = min(int(retry_after), max_wait)
-                    print(f"  ⏳ Rate limit (tentativa {tentativa}). Aguardando {wait_time}s (Retry-After)")
-                else:
-                    # Backoff exponencial: min(2^tentativa, max_wait)
-                    wait_time = min((2 ** min(tentativa, 10)), max_wait)
-                    print(f"  ⏳ Rate limit (tentativa {tentativa}). Aguardando {wait_time}s")
-                
-                time.sleep(wait_time)
+                rate_limiter.register_429(retry_after)
                 continue
-            
-            # Se erro 404, não adianta tentar novamente - recurso não existe
+
             elif response.status_code == 404:
-                print(f"  ⚠️ Recurso não encontrado (404) na tentativa {tentativa}")
                 return None
-            
-            # Outros erros HTTP (500, 503, etc.)
+
             else:
-                print(f"  ⚠️ Erro HTTP {response.status_code} (tentativa {tentativa})")
-                wait_time = min((2 ** min(tentativa, 10)), max_wait)
-                print(f"  ⏳ Aguardando {wait_time}s antes de tentar novamente...")
-                time.sleep(wait_time)
-                continue
-                
+                print(f"  ⚠️  Erro HTTP {response.status_code} (tentativa {tentativa})")
+                if tentativa < max_tentativas:
+                    time.sleep(min(2 ** tentativa, 30))
+                    continue
+                return None
+
         except requests.exceptions.Timeout:
-            print(f"  ⏱️ Timeout na requisição (tentativa {tentativa})")
-            wait_time = min((2 ** min(tentativa, 10)), max_wait)
-            print(f"  ⏳ Aguardando {wait_time}s antes de tentar novamente...")
-            time.sleep(wait_time)
-            continue
-            
+            print(f"  ⏱️  Timeout (tentativa {tentativa})")
+            if tentativa < max_tentativas:
+                time.sleep(2 ** tentativa)
+                continue
+            return None
+
         except requests.exceptions.RequestException as e:
-            print(f"  ⚠️ Erro na requisição (tentativa {tentativa}): {e}")
-            wait_time = min((2 ** min(tentativa, 10)), max_wait)
-            print(f"  ⏳ Aguardando {wait_time}s antes de tentar novamente...")
-            time.sleep(wait_time)
-            continue
+            print(f"  ⚠️  Erro: {e} (tentativa {tentativa})")
+            if tentativa < max_tentativas:
+                time.sleep(2 ** tentativa)
+                continue
+            return None
+
+    return None
 
 # ===================== Função para extrair todos os campos aninhados =====================
 def extract_fields(item):
@@ -142,30 +174,37 @@ def extract_fields(item):
 
     return resultado
 
-# ===================== Coleta paralela dos detalhes via API com retry infinito =====================
+# ===================== Coleta paralela otimizada =====================
 def fetch_detail(fid):
     url = f"https://services.contaazul.com/contaazul-bff/finance/v1/financial-events/{fid}/summary"
-    
-    # Usa a função de retry infinito
-    response = fazer_requisicao_com_retry(url, headers)
-    
+    response = fazer_requisicao_otimizada(url, headers)
+
     if response and response.status_code == 200:
         return extract_fields(response.json())
-    else:
-        print(f"❌ Falha definitiva no ID {fid}")
-        return None
+    return None
 
-print("🚀 Iniciando requisições paralelas...")
+print("🚀 Iniciando coleta otimizada com rate limiter global...")
 
 todos_detalhes = []
-with ThreadPoolExecutor(max_workers=10) as executor:
-    futures = [executor.submit(fetch_detail, fid) for fid in ids]
-    for f in as_completed(futures):
-        resultado = f.result()
+processados = 0
+total_ids = len(ids)
+
+# Usar menos workers para evitar sobrecarga durante rate limiting
+with ThreadPoolExecutor(max_workers=5) as executor:
+    futures = {executor.submit(fetch_detail, fid): fid for fid in ids}
+
+    for future in as_completed(futures):
+        processados += 1
+        resultado = future.result()
         if resultado:
             todos_detalhes.extend(resultado)
 
-print(f"✅ Coleta finalizada com {len(todos_detalhes)} registros.")
+        # Progresso a cada 10%
+        if processados % max(1, total_ids // 10) == 0:
+            progresso = (processados / total_ids) * 100
+            print(f"📊 Progresso: {processados}/{total_ids} ({progresso:.1f}%) - {len(todos_detalhes)} registros")
+
+print(f"\n✅ Coleta finalizada com {len(todos_detalhes)} registros.")
 
 # ===================== Enviar dados ao Google Sheets =====================
 df_detalhes = pd.DataFrame(todos_detalhes)
