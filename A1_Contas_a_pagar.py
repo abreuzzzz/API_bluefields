@@ -1,13 +1,12 @@
 import os
 import json
 import pandas as pd
-import requests
+import asyncio
+import aiohttp
 from datetime import datetime, timedelta
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
-import threading
 
 # ===================== Autenticar com Google APIs =====================
 json_secret = os.getenv("GDRIVE_SERVICE_ACCOUNT")
@@ -42,13 +41,13 @@ colunas_base = [
     "categoriesRatio.costCentersRatio.0.costCenter"
 ]
 
-# Lock para sincronizar prints e contadores
-print_lock = threading.Lock()
-progress_counter = {'current': 0, 'total': 0}
+# Contadores globais
+progress = {'current': 0, 'total': 0, 'registros': 0}
 
-# ===================== Função para buscar centros de custo =====================
+# ===================== Função para buscar centros de custo (síncrona) =====================
 def buscar_centros_custo():
     """Busca todos os centros de custo ativos da API"""
+    import requests
     url = "https://services.contaazul.com/finance-pro/v1/cost-centers?search=&page_size=500&page=1"
     
     print("🏢 Buscando centros de custo...")
@@ -61,14 +60,10 @@ def buscar_centros_custo():
     data = response.json()
     cost_centers = data.get("items", [])
     
-    # Criar lista com ID e nome dos centros de custo
     cost_centers_list = [{"id": cc["id"], "name": cc["name"]} for cc in cost_centers]
-    
     print(f"✅ {len(cost_centers_list)} centros de custo encontrados")
     
-    # Adicionar opção NONE para extrair registros sem centro de custo
     cost_centers_list.append({"id": "NONE", "name": "Sem Centro de Custo"})
-    
     return cost_centers_list
 
 # ===================== Função para gerar períodos de 15 dias =====================
@@ -87,190 +82,170 @@ def gerar_periodos(data_inicio, data_fim):
     
     return periodos
 
-# ===================== Função para fazer requisição com retry infinito =====================
-def fazer_requisicao_com_retry(url, headers, payload, max_wait=300):
-    """
-    Faz requisição com retry infinito e backoff exponencial crescente.
-    
-    Args:
-        url: URL da requisição
-        headers: Headers HTTP
-        payload: Corpo da requisição
-        max_wait: Tempo máximo de espera em segundos (padrão 300s = 5 min)
-    
-    Returns:
-        response: Resposta da requisição bem-sucedida
-    """
-    tentativa = 0
-    
-    while True:  # Loop infinito até conseguir
-        tentativa += 1
+# ===================== Função assíncrona para fazer requisição com retry =====================
+async def fazer_requisicao_async(session, url, payload, semaphore, max_retries=10):
+    """Faz requisição assíncrona com retry e rate limiting"""
+    async with semaphore:  # Limita requisições concorrentes
+        for tentativa in range(1, max_retries + 1):
+            try:
+                async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=30)) as response:
+                    if response.status == 200:
+                        return await response.json()
+                    elif response.status == 429:
+                        retry_after = response.headers.get('Retry-After', 2)
+                        wait_time = min(int(retry_after) if isinstance(retry_after, (int, str)) and str(retry_after).isdigit() else 2 ** tentativa, 60)
+                        await asyncio.sleep(wait_time)
+                    else:
+                        await asyncio.sleep(2 ** min(tentativa, 5))
+            except asyncio.TimeoutError:
+                await asyncio.sleep(2 ** min(tentativa, 5))
+            except Exception as e:
+                await asyncio.sleep(2 ** min(tentativa, 5))
         
-        try:
-            response = requests.post(url, headers=headers, data=payload, timeout=30)
-            
-            # Se sucesso, retorna a resposta
-            if response.status_code == 200:
-                return response
-            
-            # Se erro 429 (rate limit), aplica backoff
-            elif response.status_code == 429:
-                # Tenta pegar o Retry-After header
-                retry_after = response.headers.get('Retry-After')
-                
-                if retry_after:
-                    wait_time = min(int(retry_after), max_wait)
-                else:
-                    # Backoff exponencial: min(2^tentativa, max_wait)
-                    wait_time = min((2 ** min(tentativa, 10)), max_wait)
-                
-                time.sleep(wait_time)
-                continue
-            
-            # Outros erros HTTP (500, 503, etc.)
-            else:
-                wait_time = min((2 ** min(tentativa, 10)), max_wait)
-                time.sleep(wait_time)
-                continue
-                
-        except requests.exceptions.Timeout:
-            wait_time = min((2 ** min(tentativa, 10)), max_wait)
-            time.sleep(wait_time)
-            continue
-            
-        except requests.exceptions.RequestException as e:
-            wait_time = min((2 ** min(tentativa, 10)), max_wait)
-            time.sleep(wait_time)
-            continue
+        return None  # Retorna None após todas as tentativas falharem
 
-# ===================== Função para coletar dados de um período e centro de custo =====================
-def coletar_dados_periodo_centro_custo(periodo, cost_center_id, max_pages=20, delay_entre_requisicoes=0.3):
-    """Coleta dados paginados para um período e centro de custo específico com rate limiting"""
+# ===================== Função assíncrona para coletar dados de um período =====================
+async def coletar_dados_periodo_async(session, periodo, cost_center_id, cost_center_name, semaphore):
+    """Coleta todos os dados de um período para um centro de custo"""
     page = 1
     page_size = 100
+    max_pages = 50  # Aumentado para capturar mais dados
     items_periodo = []
     
+    url = f"https://services.contaazul.com/finance-pro-reader/v1/installment-view?page={{page}}&page_size={page_size}"
+    
     while page <= max_pages:
-        url = f"https://services.contaazul.com/finance-pro-reader/v1/installment-view?page={page}&page_size={page_size}"
-        payload = json.dumps({
+        current_url = url.format(page=page)
+        payload = {
             "dueDateFrom": periodo['dueDateFrom'],
             "dueDateTo": periodo['dueDateTo'],
             "quickFilter": "ALL",
             "search": "",
             "type": "EXPENSE",
             "costCenterIds": [cost_center_id]
-        })
+        }
         
-        # Faz requisição com retry infinito
-        response = fazer_requisicao_com_retry(url, headers, payload)
-        data = response.json()
+        data = await fazer_requisicao_async(session, current_url, payload, semaphore)
+        
+        if data is None:
+            break
+        
         items = data.get("items", [])
-        
         if not items:
             break
         
-        items_periodo.extend(items)
-        page += 1
-        
-        # Delay reduzido para compensar paralelização
-        time.sleep(delay_entre_requisicoes)
-    
-    return items_periodo
-
-# ===================== Função para processar um centro de custo completo =====================
-def processar_centro_custo(cost_center, periodos, idx_cc, total_cost_centers):
-    """Processa todos os períodos de um centro de custo"""
-    cc_id = cost_center["id"]
-    cc_name = cost_center["name"]
-    
-    with print_lock:
-        print(f"\n{'='*80}")
-        print(f"🏢 CENTRO DE CUSTO {idx_cc}/{total_cost_centers}: {cc_name} (ID: {cc_id})")
-        print(f"{'='*80}")
-    
-    items_centro_custo = []
-    
-    for idx_periodo, periodo in enumerate(periodos, 1):
-        with print_lock:
-            progress_counter['current'] += 1
-            print(f"🔍 [{progress_counter['current']}/{progress_counter['total']}] {cc_name} - Período {idx_periodo}/{len(periodos)}: {periodo['dueDateFrom']} a {periodo['dueDateTo']}")
-        
-        items_periodo = coletar_dados_periodo_centro_custo(periodo, cc_id)
-        
-        # Adicionar o nome do centro de custo em cada item
-        for item in items_periodo:
+        # Adicionar nome do centro de custo
+        for item in items:
             if "categoriesRatio" not in item:
                 item["categoriesRatio"] = {}
             if "costCentersRatio" not in item["categoriesRatio"]:
                 item["categoriesRatio"]["costCentersRatio"] = [{}]
             if not item["categoriesRatio"]["costCentersRatio"]:
                 item["categoriesRatio"]["costCentersRatio"] = [{}]
+            item["categoriesRatio"]["costCentersRatio"][0]["costCenter"] = cost_center_name
+        
+        items_periodo.extend(items)
+        page += 1
+    
+    return items_periodo
+
+# ===================== Função assíncrona para processar um centro de custo =====================
+async def processar_centro_custo_async(session, cost_center, periodos, semaphore):
+    """Processa todos os períodos de um centro de custo de forma assíncrona"""
+    cc_id = cost_center["id"]
+    cc_name = cost_center["name"]
+    
+    # Criar todas as tarefas para este centro de custo
+    tasks = []
+    for periodo in periodos:
+        task = coletar_dados_periodo_async(session, periodo, cc_id, cc_name, semaphore)
+        tasks.append(task)
+    
+    # Executar todas as tarefas em paralelo
+    results = await asyncio.gather(*tasks)
+    
+    # Consolidar resultados
+    all_items = []
+    for items in results:
+        if items:
+            all_items.extend(items)
+        progress['current'] += 1
+        progress['registros'] = len(all_items)
+        
+        # Print periódico de progresso (a cada 10 períodos)
+        if progress['current'] % 10 == 0:
+            print(f"📊 Progresso: {progress['current']}/{progress['total']} ({(progress['current']/progress['total']*100):.1f}%) | Total: {progress['registros']} registros | Centro: {cc_name}")
+    
+    print(f"✅ Centro '{cc_name}' concluído: {len(all_items)} registros")
+    return all_items
+
+# ===================== Função principal assíncrona =====================
+async def main_async(cost_centers, periodos):
+    """Função principal que coordena toda a coleta assíncrona"""
+    
+    # Configurar semáforo para limitar requisições concorrentes
+    # Ajuste este valor conforme o rate limit da API (20-50 é geralmente seguro)
+    MAX_CONCURRENT_REQUESTS = 30
+    semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
+    
+    # Configurar timeout e limites de conexão
+    timeout = aiohttp.ClientTimeout(total=None, connect=30, sock_read=30)
+    connector = aiohttp.TCPConnector(limit=100, limit_per_host=30)
+    
+    all_items = []
+    
+    async with aiohttp.ClientSession(headers=headers, timeout=timeout, connector=connector) as session:
+        # Processar centros de custo em lotes (para não sobrecarregar)
+        BATCH_SIZE = 3  # Processar 3 centros de custo por vez
+        
+        for i in range(0, len(cost_centers), BATCH_SIZE):
+            batch = cost_centers[i:i+BATCH_SIZE]
+            print(f"\n{'='*80}")
+            print(f"🚀 Processando lote {i//BATCH_SIZE + 1}/{(len(cost_centers)-1)//BATCH_SIZE + 1}")
+            print(f"{'='*80}\n")
             
-            item["categoriesRatio"]["costCentersRatio"][0]["costCenter"] = cc_name
-        
-        items_centro_custo.extend(items_periodo)
-        
-        if items_periodo:
-            with print_lock:
-                print(f"  📄 {len(items_periodo)} registros coletados | Total deste centro: {len(items_centro_custo)}")
+            tasks = [processar_centro_custo_async(session, cc, periodos, semaphore) for cc in batch]
+            batch_results = await asyncio.gather(*tasks)
+            
+            for items in batch_results:
+                all_items.extend(items)
+            
+            print(f"\n📦 Total acumulado: {len(all_items)} registros\n")
     
-    with print_lock:
-        print(f"✅ Centro '{cc_name}' finalizado: {len(items_centro_custo)} registros")
-    
-    return items_centro_custo
+    return all_items
 
-# ===================== Buscar centros de custo =====================
-cost_centers = buscar_centros_custo()
-
-if not cost_centers:
-    raise Exception("Nenhum centro de custo encontrado. Verifique a API.")
-
-# ===================== Coleta paginada da API por períodos e centros de custo =====================
-data_inicio = datetime(2015, 1, 1)
-data_fim = datetime(2030, 12, 31)
-
-print(f"\n🔄 Gerando períodos de 15 dias entre {data_inicio.date()} e {data_fim.date()}...")
-periodos = gerar_periodos(data_inicio, data_fim)
-print(f"📊 Total de períodos a processar: {len(periodos)}")
-print(f"🏢 Total de centros de custo a processar: {len(cost_centers)}")
-print(f"🔢 Total de combinações (períodos × centros): {len(periodos) * len(cost_centers)}")
-
-# Configurar contador de progresso
-progress_counter['total'] = len(periodos) * len(cost_centers)
-
-# ===================== Processar centros de custo em paralelo =====================
-# Ajuste max_workers conforme necessário (5-10 é geralmente seguro para APIs)
-MAX_WORKERS = 5
-
-print(f"\n🚀 Iniciando processamento paralelo com {MAX_WORKERS} workers...\n")
-
-all_items = []
+# ===================== Execução principal =====================
+print("🚀 Iniciando coleta de dados otimizada com asyncio + aiohttp\n")
 start_time = time.time()
 
-with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-    # Submeter todas as tarefas
-    futures = {
-        executor.submit(processar_centro_custo, cc, periodos, idx, len(cost_centers)): cc
-        for idx, cc in enumerate(cost_centers, 1)
-    }
-    
-    # Processar resultados conforme completam
-    for future in as_completed(futures):
-        cost_center = futures[future]
-        try:
-            items = future.result()
-            all_items.extend(items)
-            with print_lock:
-                print(f"\n📦 Total acumulado geral: {len(all_items)} registros")
-        except Exception as exc:
-            with print_lock:
-                print(f"❌ Erro ao processar {cost_center['name']}: {exc}")
+# Buscar centros de custo
+cost_centers = buscar_centros_custo()
+if not cost_centers:
+    raise Exception("Nenhum centro de custo encontrado.")
+
+# Gerar períodos
+data_inicio = datetime(2015, 1, 1)
+data_fim = datetime(2030, 12, 31)
+print(f"\n🔄 Gerando períodos de 15 dias entre {data_inicio.date()} e {data_fim.date()}...")
+periodos = gerar_periodos(data_inicio, data_fim)
+
+print(f"📊 Total de períodos: {len(periodos)}")
+print(f"🏢 Total de centros de custo: {len(cost_centers)}")
+print(f"🔢 Total de combinações: {len(periodos) * len(cost_centers)}\n")
+
+# Configurar progresso
+progress['total'] = len(periodos) * len(cost_centers)
+
+# Executar coleta assíncrona
+all_items = asyncio.run(main_async(cost_centers, periodos))
 
 elapsed_time = time.time() - start_time
 
 print(f"\n{'='*80}")
-print(f"✅ Coleta finalizada! Total de registros: {len(all_items)}")
-print(f"⏱️  Tempo total: {elapsed_time:.2f} segundos ({elapsed_time/60:.2f} minutos)")
+print(f"✅ Coleta finalizada!")
+print(f"📊 Total de registros: {len(all_items)}")
+print(f"⏱️  Tempo total: {elapsed_time:.2f}s ({elapsed_time/60:.2f} min)")
+print(f"⚡ Velocidade: {len(all_items)/elapsed_time:.2f} registros/segundo")
 print(f"{'='*80}\n")
 
 # ===================== Normalização dos dados =====================
@@ -290,34 +265,34 @@ def extract_fields(item, campos):
         flat_item[campo] = valor if valor not in [{}, []] else None
     return flat_item
 
+print("🔄 Normalizando dados...")
 dados_formatados = [extract_fields(item, colunas_base) for item in all_items]
 df = pd.DataFrame(dados_formatados)
 
-# Remover duplicatas baseadas no ID
+# Remover duplicatas
 df = df.drop_duplicates(subset=['id'], keep='first')
-print(f"📋 Total de registros únicos após remoção de duplicatas: {len(df)}")
+print(f"📋 Registros únicos após deduplicação: {len(df)}")
 
-# ===================== Buscar ID da planilha no Google Drive =====================
+# ===================== Atualizar Google Sheets =====================
 folder_id = "1_kJtBN_cr_WpND1nF3WtI5smi3LfIxNy"
 sheet_name = "Financeiro_contas_a_pagar_Bluefields"
 
+print(f"\n📍 Buscando planilha '{sheet_name}'...")
 query = f"name='{sheet_name}' and mimeType='application/vnd.google-apps.spreadsheet' and '{folder_id}' in parents and trashed=false"
 results = drive_service.files().list(q=query, spaces='drive', fields="files(id, name)").execute()
 files = results.get("files", [])
 
 if not files:
-    raise Exception(f"Planilha '{sheet_name}' não encontrada na pasta do Drive.")
+    raise Exception(f"Planilha '{sheet_name}' não encontrada.")
 
 spreadsheet_id = files[0]['id']
 
-# ===================== Limpar conteúdo anterior da planilha =====================
-print(f"\n🧹 Limpando planilha '{sheet_name}'...")
+print(f"🧹 Limpando planilha...")
 sheets_service.spreadsheets().values().clear(
     spreadsheetId=spreadsheet_id,
     range="A:Z"
 ).execute()
 
-# ===================== Atualizar dados na planilha =====================
 print(f"📤 Atualizando planilha com {len(df)} registros...")
 values = [df.columns.tolist()] + df.fillna("").values.tolist()
 sheets_service.spreadsheets().values().update(
@@ -327,6 +302,8 @@ sheets_service.spreadsheets().values().update(
     body={"values": values}
 ).execute()
 
-print(f"\n✅ Planilha Google '{sheet_name}' atualizada com sucesso!")
-print(f"📊 Total de registros: {len(df)}")
-print(f"⚡ Velocidade: {len(df)/elapsed_time:.2f} registros/segundo")
+total_time = time.time() - start_time
+print(f"\n✅ CONCLUÍDO!")
+print(f"📊 Total de registros na planilha: {len(df)}")
+print(f"⏱️  Tempo total (incluindo upload): {total_time:.2f}s ({total_time/60:.2f} min)")
+print(f"⚡ Performance final: {len(df)/total_time:.2f} registros/segundo")
