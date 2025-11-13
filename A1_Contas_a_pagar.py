@@ -6,7 +6,6 @@ from datetime import datetime, timedelta
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # ===================== Autenticar com Google APIs =====================
 json_secret = os.getenv("GDRIVE_SERVICE_ACCOUNT")
@@ -43,30 +42,28 @@ colunas_base = [
 
 # ===================== Função para buscar centros de custo =====================
 def buscar_centros_custo():
-    """Busca todos os centros de custo da API Conta Azul"""
-    print("🔍 Buscando centros de custo...")
-    
+    """Busca todos os centros de custo ativos da API"""
     url = "https://services.contaazul.com/finance-pro/v1/cost-centers?search=&page_size=500&page=1"
     
-    try:
-        response = requests.get(url, headers=headers, timeout=30)
-        
-        if response.status_code == 200:
-            data = response.json()
-            items = data.get("items", [])
-            
-            # Criar dicionário de ID -> Nome para facilitar lookup
-            centros_custo = {item["id"]: item["name"] for item in items if item.get("active", True)}
-            
-            print(f"✅ {len(centros_custo)} centros de custo encontrados")
-            return centros_custo
-        else:
-            print(f"⚠️ Erro ao buscar centros de custo: {response.status_code}")
-            return {}
+    print("🏢 Buscando centros de custo...")
+    response = requests.get(url, headers=headers)
     
-    except Exception as e:
-        print(f"⚠️ Erro ao buscar centros de custo: {e}")
-        return {}
+    if response.status_code != 200:
+        print(f"❌ Erro ao buscar centros de custo: {response.status_code}")
+        return []
+    
+    data = response.json()
+    cost_centers = data.get("items", [])
+    
+    # Criar lista com ID e nome dos centros de custo
+    cost_centers_list = [{"id": cc["id"], "name": cc["name"]} for cc in cost_centers]
+    
+    print(f"✅ {len(cost_centers_list)} centros de custo encontrados")
+    
+    # Adicionar opção NONE para extrair registros sem centro de custo
+    cost_centers_list.append({"id": "NONE", "name": "Sem Centro de Custo"})
+    
+    return cost_centers_list
 
 # ===================== Função para gerar períodos de 15 dias =====================
 def gerar_periodos(data_inicio, data_fim):
@@ -84,169 +81,187 @@ def gerar_periodos(data_inicio, data_fim):
     
     return periodos
 
-# ===================== Session reutilizável (otimização) =====================
-session = requests.Session()
-session.headers.update(headers)
-
-# ===================== Função para fazer requisição com retry =====================
-def fazer_requisicao_com_retry(url, payload, max_wait=300):
-    """Faz requisição com retry e backoff exponencial"""
+# ===================== Função para fazer requisição com retry infinito =====================
+def fazer_requisicao_com_retry(url, headers, payload, max_wait=300):
+    """
+    Faz requisição com retry infinito e backoff exponencial crescente.
+    
+    Args:
+        url: URL da requisição
+        headers: Headers HTTP
+        payload: Corpo da requisição
+        max_wait: Tempo máximo de espera em segundos (padrão 300s = 5 min)
+    
+    Returns:
+        response: Resposta da requisição bem-sucedida
+    """
     tentativa = 0
     
-    while True:
+    while True:  # Loop infinito até conseguir
         tentativa += 1
         
         try:
-            response = session.post(url, data=payload, timeout=30)
+            response = requests.post(url, headers=headers, data=payload, timeout=30)
             
+            # Se sucesso, retorna a resposta
             if response.status_code == 200:
+                if tentativa > 1:
+                    print(f"  ✅ Requisição bem-sucedida após {tentativa} tentativas!")
                 return response
             
+            # Se erro 429 (rate limit), aplica backoff
             elif response.status_code == 429:
+                # Tenta pegar o Retry-After header
                 retry_after = response.headers.get('Retry-After')
-                wait_time = min(int(retry_after) if retry_after else (2 ** min(tentativa, 10)), max_wait)
-                print(f"  ⏳ Rate limit (tentativa {tentativa}). Aguardando {wait_time}s")
+                
+                if retry_after:
+                    wait_time = min(int(retry_after), max_wait)
+                    print(f"  ⏳ Rate limit (tentativa {tentativa}). Aguardando {wait_time}s (Retry-After)")
+                else:
+                    # Backoff exponencial: min(2^tentativa, max_wait)
+                    wait_time = min((2 ** min(tentativa, 10)), max_wait)
+                    print(f"  ⏳ Rate limit (tentativa {tentativa}). Aguardando {wait_time}s")
+                
                 time.sleep(wait_time)
                 continue
             
+            # Outros erros HTTP (500, 503, etc.)
             else:
+                print(f"  ⚠️ Erro HTTP {response.status_code} (tentativa {tentativa})")
                 wait_time = min((2 ** min(tentativa, 10)), max_wait)
+                print(f"  ⏳ Aguardando {wait_time}s antes de tentar novamente...")
                 time.sleep(wait_time)
                 continue
                 
         except requests.exceptions.Timeout:
+            print(f"  ⏱️ Timeout na requisição (tentativa {tentativa})")
             wait_time = min((2 ** min(tentativa, 10)), max_wait)
+            print(f"  ⏳ Aguardando {wait_time}s antes de tentar novamente...")
             time.sleep(wait_time)
             continue
             
-        except requests.exceptions.RequestException:
+        except requests.exceptions.RequestException as e:
+            print(f"  ⚠️ Erro na requisição (tentativa {tentativa}): {e}")
             wait_time = min((2 ** min(tentativa, 10)), max_wait)
+            print(f"  ⏳ Aguardando {wait_time}s antes de tentar novamente...")
             time.sleep(wait_time)
             continue
 
-# ===================== Função otimizada para coletar dados =====================
-def coletar_dados_periodo_centro_custo(periodo, cost_center_id, cost_center_name):
-    """Coleta todos os dados de um período e centro de custo"""
+# ===================== Função para coletar dados de um período e centro de custo =====================
+def coletar_dados_periodo_centro_custo(periodo, cost_center_id, max_pages=20, delay_entre_requisicoes=0.5):
+    """Coleta dados paginados para um período e centro de custo específico com rate limiting"""
     page = 1
     page_size = 100
     items_periodo = []
     
-    while True:
+    while page <= max_pages:
         url = f"https://services.contaazul.com/finance-pro-reader/v1/installment-view?page={page}&page_size={page_size}"
-        
-        payload_dict = {
+        payload = json.dumps({
             "dueDateFrom": periodo['dueDateFrom'],
             "dueDateTo": periodo['dueDateTo'],
             "quickFilter": "ALL",
             "search": "",
             "type": "EXPENSE",
-            "costCenterIds": ["NONE"] if cost_center_id == "NONE" else [cost_center_id]
-        }
+            "costCenterIds": [cost_center_id]
+        })
         
-        payload = json.dumps(payload_dict)
-        response = fazer_requisicao_com_retry(url, payload)
+        # Faz requisição com retry infinito
+        response = fazer_requisicao_com_retry(url, headers, payload)
         data = response.json()
         items = data.get("items", [])
         
         if not items:
             break
         
-        # Adiciona o nome do centro de custo em batch
-        for item in items:
-            item["centro_custo_nome"] = cost_center_name
-        
         items_periodo.extend(items)
         page += 1
         
-        # Delay reduzido para 0.2s
-        time.sleep(0.2)
+        # Delay entre requisições para evitar rate limit
+        time.sleep(delay_entre_requisicoes)
     
-    return items_periodo, periodo, cost_center_name, len(items_periodo)
+    return items_periodo
 
-# ===================== Wrapper para processamento paralelo =====================
-def processar_combinacao(args):
-    """Wrapper para ThreadPoolExecutor"""
-    periodo, centro_id, centro_nome = args
-    return coletar_dados_periodo_centro_custo(periodo, centro_id, centro_nome)
+# ===================== Buscar centros de custo =====================
+cost_centers = buscar_centros_custo()
 
-# ===================== INÍCIO DO PROCESSAMENTO =====================
+if not cost_centers:
+    raise Exception("Nenhum centro de custo encontrado. Verifique a API.")
 
-# 1. Buscar centros de custo
-centros_custo_dict = buscar_centros_custo()
-centros_custo_dict["NONE"] = "Sem Centro de Custo"
-
-print(f"\n📋 Total de centros de custo (incluindo NONE): {len(centros_custo_dict)}")
-
-# 2. Definir período de busca com períodos de 15 dias
+# ===================== Coleta paginada da API por períodos e centros de custo =====================
 data_inicio = datetime(2015, 1, 1)
 data_fim = datetime(2030, 12, 31)
 
 print(f"\n🔄 Gerando períodos de 15 dias entre {data_inicio.date()} e {data_fim.date()}...")
 periodos = gerar_periodos(data_inicio, data_fim)
 print(f"📊 Total de períodos a processar: {len(periodos)}")
+print(f"🏢 Total de centros de custo a processar: {len(cost_centers)}")
+print(f"🔢 Total de combinações (períodos × centros): {len(periodos) * len(cost_centers)}\n")
 
-# 3. Criar lista de todas as combinações período + centro de custo
-combinacoes = [
-    (periodo, centro_id, centro_nome)
-    for periodo in periodos
-    for centro_id, centro_nome in centros_custo_dict.items()
-]
-
-total_combinacoes = len(combinacoes)
-print(f"🔢 Total de combinações a processar: {total_combinacoes}")
-
-# 4. Processamento paralelo com ThreadPoolExecutor
 all_items = []
-print(f"\n🚀 Iniciando processamento paralelo com 10 threads...")
+total_periodos = len(periodos)
+total_cost_centers = len(cost_centers)
+combinacao_atual = 0
+total_combinacoes = total_periodos * total_cost_centers
 
-with ThreadPoolExecutor(max_workers=10) as executor:
-    # Submete todas as tarefas
-    futures = {executor.submit(processar_combinacao, comb): comb for comb in combinacoes}
+for idx_cc, cost_center in enumerate(cost_centers, 1):
+    cc_id = cost_center["id"]
+    cc_name = cost_center["name"]
     
-    # Processa resultados conforme completam
-    for idx, future in enumerate(as_completed(futures), 1):
-        try:
-            items, periodo, centro_nome, qtd = future.result()
-            all_items.extend(items)
+    print(f"\n{'='*80}")
+    print(f"🏢 CENTRO DE CUSTO {idx_cc}/{total_cost_centers}: {cc_name} (ID: {cc_id})")
+    print(f"{'='*80}")
+    
+    for idx_periodo, periodo in enumerate(periodos, 1):
+        combinacao_atual += 1
+        print(f"\n🔍 [{combinacao_atual}/{total_combinacoes}] Período {idx_periodo}/{total_periodos}: {periodo['dueDateFrom']} a {periodo['dueDateTo']}")
+        
+        items_periodo = coletar_dados_periodo_centro_custo(periodo, cc_id)
+        
+        # Adicionar o nome do centro de custo em cada item
+        for item in items_periodo:
+            # Adicionar campo para o nome do centro de custo
+            if "categoriesRatio" not in item:
+                item["categoriesRatio"] = {}
+            if "costCentersRatio" not in item["categoriesRatio"]:
+                item["categoriesRatio"]["costCentersRatio"] = [{}]
+            if not item["categoriesRatio"]["costCentersRatio"]:
+                item["categoriesRatio"]["costCentersRatio"] = [{}]
             
-            if qtd > 0:
-                print(f"✅ [{idx}/{total_combinacoes}] {periodo['dueDateFrom']} a {periodo['dueDateTo']} | {centro_nome}: {qtd} registros | Total: {len(all_items)}")
-            
-        except Exception as e:
-            comb = futures[future]
-            print(f"❌ Erro em {comb[0]['dueDateFrom']} - {comb[2]}: {e}")
+            item["categoriesRatio"]["costCentersRatio"][0]["costCenter"] = cc_name
+        
+        all_items.extend(items_periodo)
+        
+        if items_periodo:
+            print(f"  📄 {len(items_periodo)} registros coletados")
+        print(f"  ✅ Total acumulado geral: {len(all_items)} registros")
 
 print(f"\n{'='*80}")
 print(f"✅ Coleta finalizada! Total de registros: {len(all_items)}")
-print(f"{'='*80}")
+print(f"{'='*80}\n")
 
 # ===================== Normalização dos dados =====================
 def extract_fields(item, campos):
     flat_item = {}
     for campo in campos:
-        if campo == "categoriesRatio.costCentersRatio.0.costCenter":
-            flat_item[campo] = item.get("centro_custo_nome")
-            continue
-        
         partes = campo.split('.')
         valor = item
         for parte in partes:
-            valor = valor.get(parte, {}) if isinstance(valor, dict) else {}
-        flat_item[campo] = valor if valor != {} else None
+            if isinstance(valor, dict):
+                valor = valor.get(parte, {})
+            elif isinstance(valor, list) and parte.isdigit():
+                idx = int(parte)
+                valor = valor[idx] if idx < len(valor) else {}
+            else:
+                valor = {}
+        flat_item[campo] = valor if valor not in [{}, []] else None
     return flat_item
 
-print("\n📊 Normalizando dados...")
 dados_formatados = [extract_fields(item, colunas_base) for item in all_items]
 df = pd.DataFrame(dados_formatados)
 
-# Remover duplicatas
-df_antes = len(df)
+# Remover duplicatas baseadas no ID
 df = df.drop_duplicates(subset=['id'], keep='first')
-df_depois = len(df)
-print(f"\n🧹 Remoção de duplicatas:")
-print(f"  Antes: {df_antes} registros")
-print(f"  Depois: {df_depois} registros")
-print(f"  Removidos: {df_antes - df_depois} duplicatas")
+print(f"📋 Total de registros únicos após remoção de duplicatas: {len(df)}")
 
 # ===================== Buscar ID da planilha no Google Drive =====================
 folder_id = "1_kJtBN_cr_WpND1nF3WtI5smi3LfIxNy"
@@ -261,13 +276,15 @@ if not files:
 
 spreadsheet_id = files[0]['id']
 
-# ===================== Limpar e atualizar planilha =====================
-print(f"\n🧹 Limpando e atualizando planilha '{sheet_name}'...")
+# ===================== Limpar conteúdo anterior da planilha =====================
+print(f"\n🧹 Limpando planilha '{sheet_name}'...")
 sheets_service.spreadsheets().values().clear(
     spreadsheetId=spreadsheet_id,
     range="A:Z"
 ).execute()
 
+# ===================== Atualizar dados na planilha =====================
+print(f"📤 Atualizando planilha com {len(df)} registros...")
 values = [df.columns.tolist()] + df.fillna("").values.tolist()
 sheets_service.spreadsheets().values().update(
     spreadsheetId=spreadsheet_id,
@@ -276,8 +293,5 @@ sheets_service.spreadsheets().values().update(
     body={"values": values}
 ).execute()
 
-print(f"\n{'='*80}")
-print(f"✅ Planilha Google '{sheet_name}' atualizada com sucesso!")
-print(f"📊 Total de registros únicos: {len(df)}")
-print(f"📋 Colunas extraídas: {len(df.columns)}")
-print(f"{'='*80}")
+print(f"\n✅ Planilha Google '{sheet_name}' atualizada com sucesso!")
+print(f"📊 Total de registros: {len(df)}")
