@@ -36,8 +36,36 @@ colunas_base = [
     "financialEvent.competenceDate",
     "financialEvent.categoryDescriptions",
     "financialEvent.negotiator.id",
-    "financialEvent.negotiator.name"
+    "financialEvent.negotiator.name",
+    "categoriesRatio.costCentersRatio.0.costCenter"
 ]
+
+# ===================== Função para buscar centros de custo =====================
+def buscar_centros_custo():
+    """Busca todos os centros de custo da API Conta Azul"""
+    print("🔍 Buscando centros de custo...")
+    
+    url = "https://services.contaazul.com/finance-pro/v1/cost-centers?search=&page_size=500&page=1"
+    
+    try:
+        response = requests.get(url, headers=headers, timeout=30)
+        
+        if response.status_code == 200:
+            data = response.json()
+            items = data.get("items", [])
+            
+            # Criar dicionário de ID -> Nome para facilitar lookup
+            centros_custo = {item["id"]: item["name"] for item in items if item.get("active", True)}
+            
+            print(f"✅ {len(centros_custo)} centros de custo encontrados")
+            return centros_custo
+        else:
+            print(f"⚠️ Erro ao buscar centros de custo: {response.status_code}")
+            return {}
+    
+    except Exception as e:
+        print(f"⚠️ Erro ao buscar centros de custo: {e}")
+        return {}
 
 # ===================== Função para gerar períodos de 15 dias =====================
 def gerar_periodos(data_inicio, data_fim):
@@ -121,24 +149,34 @@ def fazer_requisicao_com_retry(url, headers, payload, max_wait=300):
             time.sleep(wait_time)
             continue
 
-# ===================== Função para coletar dados de um período =====================
-def coletar_dados_periodo(periodo, max_pages=20, delay_entre_requisicoes=0.5):
-    """Coleta dados paginados para um período específico com rate limiting"""
+# ===================== Função para coletar dados de um período e centro de custo =====================
+def coletar_dados_periodo_centro_custo(periodo, cost_center_id, cost_center_name, max_pages=20, delay_entre_requisicoes=0.5):
+    """Coleta dados paginados para um período e centro de custo específicos"""
     page = 1
     page_size = 100
     items_periodo = []
     
     while page <= max_pages:
         url = f"https://services.contaazul.com/finance-pro-reader/v1/installment-view?page={page}&page_size={page_size}"
-        payload = json.dumps({
+        
+        # Monta payload com centro de custo
+        payload_dict = {
             "dueDateFrom": periodo['dueDateFrom'],
             "dueDateTo": periodo['dueDateTo'],
             "quickFilter": "ALL",
             "search": "",
             "type": "REVENUE"
-        })
+        }
         
-        # Faz requisição com retry infinito - agora sempre vai conseguir
+        # Adiciona filtro de centro de custo
+        if cost_center_id == "NONE":
+            payload_dict["costCenterIds"] = ["NONE"]
+        else:
+            payload_dict["costCenterIds"] = [cost_center_id]
+        
+        payload = json.dumps(payload_dict)
+        
+        # Faz requisição com retry infinito
         response = fazer_requisicao_com_retry(url, headers, payload)
         data = response.json()
         items = data.get("items", [])
@@ -146,39 +184,74 @@ def coletar_dados_periodo(periodo, max_pages=20, delay_entre_requisicoes=0.5):
         if not items:
             break
         
+        # Adiciona o nome do centro de custo em cada item
+        for item in items:
+            item["centro_custo_nome"] = cost_center_name
+        
         items_periodo.extend(items)
         page += 1
         
-        print(f"  📄 Página {page-1}: {len(items)} registros coletados ({periodo['dueDateFrom']} a {periodo['dueDateTo']})")
+        print(f"    📄 Página {page-1}: {len(items)} registros | Centro: {cost_center_name}")
         
         # Delay entre requisições para evitar rate limit
         time.sleep(delay_entre_requisicoes)
     
     return items_periodo
 
-# ===================== Coleta paginada da API por períodos =====================
+# ===================== INÍCIO DO PROCESSAMENTO =====================
+
+# 1. Buscar centros de custo
+centros_custo_dict = buscar_centros_custo()
+
+# Adicionar "NONE" para registros sem centro de custo
+centros_custo_dict["NONE"] = "Sem Centro de Custo"
+
+print(f"\n📋 Total de centros de custo (incluindo NONE): {len(centros_custo_dict)}")
+
+# 2. Definir período de busca
 data_inicio = datetime(2015, 1, 1)
 data_fim = datetime(2030, 12, 31)
 
-print(f"🔄 Gerando períodos de 15 dias entre {data_inicio.date()} e {data_fim.date()}...")
+print(f"\n🔄 Gerando períodos de 15 dias entre {data_inicio.date()} e {data_fim.date()}...")
 periodos = gerar_periodos(data_inicio, data_fim)
 print(f"📊 Total de períodos a processar: {len(periodos)}")
 
+# 3. Coletar dados para cada combinação de período + centro de custo
 all_items = []
 total_periodos = len(periodos)
+total_centros = len(centros_custo_dict)
 
-for idx, periodo in enumerate(periodos, 1):
-    print(f"\n🔍 Processando período {idx}/{total_periodos}: {periodo['dueDateFrom']} a {periodo['dueDateTo']}")
-    items_periodo = coletar_dados_periodo(periodo)
-    all_items.extend(items_periodo)
-    print(f"  ✅ Total acumulado: {len(all_items)} registros")
+for idx_periodo, periodo in enumerate(periodos, 1):
+    print(f"\n{'='*80}")
+    print(f"📅 Período {idx_periodo}/{total_periodos}: {periodo['dueDateFrom']} a {periodo['dueDateTo']}")
+    print(f"{'='*80}")
+    
+    for idx_centro, (centro_id, centro_nome) in enumerate(centros_custo_dict.items(), 1):
+        print(f"\n  🏢 Centro de Custo {idx_centro}/{total_centros}: {centro_nome}")
+        
+        items_periodo_centro = coletar_dados_periodo_centro_custo(
+            periodo, 
+            centro_id, 
+            centro_nome
+        )
+        
+        all_items.extend(items_periodo_centro)
+        print(f"  ✅ {len(items_periodo_centro)} registros coletados para este centro de custo")
+        print(f"  📊 Total acumulado: {len(all_items)} registros")
 
-print(f"\n✅ Coleta finalizada! Total de registros: {len(all_items)}")
+print(f"\n{'='*80}")
+print(f"✅ Coleta finalizada! Total de registros: {len(all_items)}")
+print(f"{'='*80}")
 
 # ===================== Normalização dos dados =====================
 def extract_fields(item, campos):
     flat_item = {}
     for campo in campos:
+        # Campo especial para nome do centro de custo
+        if campo == "categoriesRatio.costCentersRatio.0.costCenter":
+            flat_item[campo] = item.get("centro_custo_nome")
+            continue
+        
         partes = campo.split('.')
         valor = item
         for parte in partes:
@@ -190,8 +263,13 @@ dados_formatados = [extract_fields(item, colunas_base) for item in all_items]
 df = pd.DataFrame(dados_formatados)
 
 # Remover duplicatas baseadas no ID
+df_antes = len(df)
 df = df.drop_duplicates(subset=['id'], keep='first')
-print(f"📋 Total de registros únicos após remoção de duplicatas: {len(df)}")
+df_depois = len(df)
+print(f"\n🧹 Remoção de duplicatas:")
+print(f"  Antes: {df_antes} registros")
+print(f"  Depois: {df_depois} registros")
+print(f"  Removidos: {df_antes - df_depois} duplicatas")
 
 # ===================== Buscar ID da planilha no Google Drive =====================
 folder_id = "1_kJtBN_cr_WpND1nF3WtI5smi3LfIxNy"
@@ -223,5 +301,8 @@ sheets_service.spreadsheets().values().update(
     body={"values": values}
 ).execute()
 
-print(f"\n✅ Planilha Google '{sheet_name}' atualizada com sucesso!")
-print(f"📊 Total de registros: {len(df)}")
+print(f"\n{'='*80}")
+print(f"✅ Planilha Google '{sheet_name}' atualizada com sucesso!")
+print(f"📊 Total de registros únicos: {len(df)}")
+print(f"📋 Colunas extraídas: {len(df.columns)}")
+print(f"{'='*80}")
