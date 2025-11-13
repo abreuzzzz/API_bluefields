@@ -5,6 +5,7 @@ import requests
 from datetime import datetime, timedelta
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
+import time
 
 # ===================== Autenticar com Google APIs =====================
 json_secret = os.getenv("GDRIVE_SERVICE_ACCOUNT")
@@ -54,9 +55,53 @@ def gerar_periodos(data_inicio, data_fim):
     
     return periodos
 
+# ===================== Função para fazer requisição com retry e backoff =====================
+def fazer_requisicao_com_retry(url, headers, payload, max_retries=5):
+    """Faz requisição com retry exponencial e respeita Retry-After header"""
+    for tentativa in range(max_retries):
+        try:
+            response = requests.post(url, headers=headers, data=payload)
+            
+            # Se sucesso, retorna a resposta
+            if response.status_code == 200:
+                return response
+            
+            # Se erro 429, aplica backoff exponencial
+            elif response.status_code == 429:
+                # Tenta pegar o Retry-After header
+                retry_after = response.headers.get('Retry-After')
+                
+                if retry_after:
+                    # Se Retry-After está presente, respeita o valor
+                    wait_time = int(retry_after)
+                    print(f"  ⏳ Rate limit atingido. Aguardando {wait_time}s (Retry-After header)")
+                else:
+                    # Backoff exponencial: 2^tentativa segundos (com jitter)
+                    wait_time = (2 ** tentativa) + (time.time() % 1)
+                    print(f"  ⏳ Rate limit atingido. Aguardando {wait_time:.1f}s (tentativa {tentativa + 1}/{max_retries})")
+                
+                time.sleep(wait_time)
+                continue
+            
+            # Outros erros HTTP
+            else:
+                response.raise_for_status()
+                
+        except requests.exceptions.RequestException as e:
+            print(f"  ⚠️ Erro na requisição (tentativa {tentativa + 1}/{max_retries}): {e}")
+            
+            if tentativa < max_retries - 1:
+                wait_time = (2 ** tentativa) + (time.time() % 1)
+                print(f"  ⏳ Aguardando {wait_time:.1f}s antes de tentar novamente...")
+                time.sleep(wait_time)
+            else:
+                raise
+    
+    raise Exception(f"Falha após {max_retries} tentativas")
+
 # ===================== Função para coletar dados de um período =====================
-def coletar_dados_periodo(periodo, max_pages=20):
-    """Coleta dados paginados para um período específico"""
+def coletar_dados_periodo(periodo, max_pages=20, delay_entre_requisicoes=0.5):
+    """Coleta dados paginados para um período específico com rate limiting"""
     page = 1
     page_size = 100
     items_periodo = []
@@ -72,8 +117,8 @@ def coletar_dados_periodo(periodo, max_pages=20):
         })
         
         try:
-            response = requests.post(url, headers=headers, data=payload)
-            response.raise_for_status()
+            # Faz requisição com proteção contra rate limit
+            response = fazer_requisicao_com_retry(url, headers, payload)
             data = response.json()
             items = data.get("items", [])
             
@@ -85,7 +130,10 @@ def coletar_dados_periodo(periodo, max_pages=20):
             
             print(f"  📄 Página {page-1}: {len(items)} registros coletados ({periodo['dueDateFrom']} a {periodo['dueDateTo']})")
             
-        except requests.exceptions.RequestException as e:
+            # Delay entre requisições para evitar rate limit
+            time.sleep(delay_entre_requisicoes)
+            
+        except Exception as e:
             print(f"  ⚠️ Erro na página {page} do período {periodo['dueDateFrom']} a {periodo['dueDateTo']}: {e}")
             break
     
