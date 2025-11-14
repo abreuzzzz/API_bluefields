@@ -152,7 +152,7 @@ colunas_renomear = {
     "Data de competência": "financialEvent.competenceDate",
     "Valor Calculado": "paid",
     "Centro de Custo 1": "categoriesRatio.costCentersRatio.0.costCenter",
-    "Categoria 1": "financialEvent.categoryDescriptions",
+    "Categoria 1": "categoriesRatio.category",
     "Descrição": "description",
     "Nome do cliente": "financialEvent.negotiator.name",
     "Data do último pagamento": "lastAcquittanceDate"
