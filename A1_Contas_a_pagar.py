@@ -149,7 +149,7 @@ spreadsheet_id = files[0]['id']
 print(f"\n🧹 Limpando planilha '{sheet_name}'...")
 sheets_service.spreadsheets().values().clear(
     spreadsheetId=spreadsheet_id,
-    range="A:Z"
+    range="A:BA"
 ).execute()
 
 # ===================== Atualizar dados na planilha =====================
