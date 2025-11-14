@@ -43,14 +43,34 @@ df_pagar["tipo"] = "Despesa"
 print("🔗 Consolidando dados de receitas e despesas...")
 df_completo = pd.concat([df_receber, df_pagar], ignore_index=True)
 
+# === CONVERSÃO DAS DATAS PARA FORMATO YYYY-MM-DD ===
+campos_data = ['lastAcquittanceDate', 'financialEvent.competenceDate', 'dueDate']
+
+print("📅 Convertendo campos de data para formato YYYY-MM-DD...")
+for campo in campos_data:
+    if campo in df_completo.columns:
+        # Converte para datetime especificando o formato DD/MM/YYYY
+        df_completo[campo] = pd.to_datetime(
+            df_completo[campo], 
+            format='%d/%m/%Y',
+            dayfirst=True,
+            errors='coerce'
+        )
+        # Converte para string no formato YYYY-MM-DD
+        df_completo[campo] = df_completo[campo].dt.strftime('%Y-%m-%d')
+
 # Remove linhas com competenceDate maior que hoje
 if 'financialEvent.competenceDate' in df_completo.columns:
-    print("📅 Filtrando registros por data de competência...")
+    print("🗓️ Filtrando registros por data de competência...")
+    # Reconverte temporariamente para comparação
     df_completo['financialEvent.competenceDate'] = pd.to_datetime(
         df_completo['financialEvent.competenceDate'], 
+        format='%Y-%m-%d',
         errors='coerce'
     )
     df_completo = df_completo[df_completo['financialEvent.competenceDate'] <= datetime.today()]
+    # Volta para string no formato YYYY-MM-DD
+    df_completo['financialEvent.competenceDate'] = df_completo['financialEvent.competenceDate'].dt.strftime('%Y-%m-%d')
 
 # Corrige valores da coluna categoriesRatio.value com base na condição
 if 'categoriesRatio.value' in df_completo.columns and 'paid' in df_completo.columns:
