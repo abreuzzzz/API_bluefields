@@ -133,14 +133,14 @@ else:
     print(f"  ✅ Coluna 'Valor Calculado' criada com sucesso!")
 
 # ===================== Converter colunas datetime para string =====================
-print(f"\n🔄 Convertendo colunas de data para string (formato YYYY-MM-DD)...")
+print(f"\n🔄 Convertendo colunas de data para string...")
 
 # Identificar colunas de tipo datetime
 datetime_columns = df_consolidado.select_dtypes(include=['datetime64']).columns.tolist()
 
-# Converter cada coluna datetime para string no formato YYYY-MM-DD
+# Converter cada coluna datetime para string no formato desejado
 for col in datetime_columns:
-    df_consolidado[col] = df_consolidado[col].dt.strftime('%Y-%m-%d')
+    df_consolidado[col] = df_consolidado[col].dt.strftime('%d/%m/%Y')
     print(f"  ✅ Coluna '{col}' convertida para string")
 
 # ===================== Renomear colunas conforme especificação =====================
