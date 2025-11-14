@@ -91,7 +91,7 @@ col_vencimento = "Data de vencimento"
 
 if col_vencimento in df_consolidado.columns:
     # Converter coluna de vencimento para datetime
-    df_consolidado[col_vencimento] = pd.to_datetime(df_consolidado[col_vencimento], errors='coerce')
+    df_consolidado[col_vencimento] = pd.to_datetime(df_consolidado[col_vencimento], format='%d/%m/%Y', errors='coerce', dayfirst=True)
 
     # Contar quantos serão atualizados
     mask_update = (df_consolidado['status'] == 'PENDING') & (df_consolidado[col_vencimento] <= ontem)
@@ -108,29 +108,40 @@ else:
 # ===================== Criar nova coluna com valor calculado =====================
 print(f"\n🔄 Criando coluna 'Valor Calculado'...")
 
-# Nomes das colunas (ajuste se necessário caso os nomes sejam diferentes)
-col_pago = "Valor total pago da parcela (R$)"
+# Nomes das colunas para contas a receber
+col_recebido = "Valor total recebido da parcela (R$)"
 col_aberto = "Valor da parcela em aberto (R$)"
 
 # Garantir que as colunas existam
-if col_pago not in df_consolidado.columns or col_aberto not in df_consolidado.columns:
+if col_recebido not in df_consolidado.columns or col_aberto not in df_consolidado.columns:
     print(f"  ⚠️ AVISO: Colunas esperadas não encontradas!")
     print(f"  Colunas disponíveis: {df_consolidado.columns.tolist()}")
 else:
     # Criar a nova coluna baseada nas condições
     def calcular_valor(row):
         if row['status'] == 'ACQUITTED':
-            # Se ACQUITTED, considerar apenas valor pago
-            return row[col_pago]
+            # Se ACQUITTED, considerar apenas valor recebido
+            return row[col_recebido]
         elif row['status'] == 'PARTIAL':
-            # Se PARTIAL, somar valor pago + valor em aberto
-            return row[col_pago] + row[col_aberto]
+            # Se PARTIAL, somar valor recebido + valor em aberto
+            return row[col_recebido] + row[col_aberto]
         else:
             # Para outros status (PENDING, OVERDUE, LOST), considerar valor em aberto
             return row[col_aberto]
 
     df_consolidado['Valor Calculado'] = df_consolidado.apply(calcular_valor, axis=1)
     print(f"  ✅ Coluna 'Valor Calculado' criada com sucesso!")
+
+# ===================== Converter colunas datetime para string =====================
+print(f"\n🔄 Convertendo colunas de data para string...")
+
+# Identificar colunas de tipo datetime
+datetime_columns = df_consolidado.select_dtypes(include=['datetime64']).columns.tolist()
+
+# Converter cada coluna datetime para string no formato desejado
+for col in datetime_columns:
+    df_consolidado[col] = df_consolidado[col].dt.strftime('%d/%m/%Y')
+    print(f"  ✅ Coluna '{col}' convertida para string")
 
 # ===================== Buscar ID da planilha no Google Drive =====================
 folder_id = "1_kJtBN_cr_WpND1nF3WtI5smi3LfIxNy"
@@ -158,13 +169,14 @@ values = [df_consolidado.columns.tolist()] + df_consolidado.fillna("").values.to
 sheets_service.spreadsheets().values().update(
     spreadsheetId=spreadsheet_id,
     range="A1",
-    valueInputOption="RAW",
+    valueInputOption="USER_ENTERED",
     body={"values": values}
 ).execute()
 
 print(f"\n✅ Planilha Google '{sheet_name}' atualizada com sucesso!")
 print(f"📊 Total de registros: {len(df_consolidado)}")
 print(f"📊 Registros por status (após ajustes):")
-for status in status_list:
+for status in status_list + ['OVERDUE']:
     count = len(df_consolidado[df_consolidado['status'] == status])
-    print(f"  - {status}: {count} registros")
+    if count > 0:
+        print(f"  - {status}: {count} registros")
