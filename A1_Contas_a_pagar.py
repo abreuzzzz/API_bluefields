@@ -47,15 +47,11 @@ for status_atual in status_list:
         response = requests.post(export_url, headers=headers, data=payload)
         response.raise_for_status()
 
-        # Ler o arquivo XLSX da resposta
         xlsx_content = BytesIO(response.content)
         df = pd.read_excel(xlsx_content)
-
-        # Adicionar coluna de status
         df['status'] = status_atual
 
         print(f"  ✅ {len(df)} registros baixados para {status_atual}")
-
         all_dataframes.append(df)
 
     except requests.exceptions.RequestException as e:
@@ -72,7 +68,6 @@ if not all_dataframes:
 print(f"\n🔄 Consolidando {len(all_dataframes)} arquivos...")
 df_consolidado = pd.concat(all_dataframes, ignore_index=True)
 
-# Remover duplicatas baseadas no ID (se existir coluna 'id')
 if 'id' in df_consolidado.columns:
     df_consolidado = df_consolidado.drop_duplicates(subset=['id'], keep='first')
     print(f"📋 Total de registros únicos após remoção de duplicatas: {len(df_consolidado)}")
@@ -82,51 +77,35 @@ else:
 # ===================== Atualizar status PENDING para OVERDUE =====================
 print(f"\n🔄 Verificando status PENDING com data vencida...")
 
-# Calcular data de ontem
 ontem = datetime.now() - timedelta(days=1)
 ontem = ontem.replace(hour=0, minute=0, second=0, microsecond=0)
 
-# Nome da coluna de data de vencimento (ajuste se necessário)
 col_vencimento = "Data de vencimento"
 
 if col_vencimento in df_consolidado.columns:
-    # Converter coluna de vencimento para datetime
     df_consolidado[col_vencimento] = pd.to_datetime(df_consolidado[col_vencimento], format='%d/%m/%Y', errors='coerce', dayfirst=True)
-
-    # Contar quantos serão atualizados
     mask_update = (df_consolidado['status'] == 'PENDING') & (df_consolidado[col_vencimento] <= ontem)
     total_atualizados = mask_update.sum()
-
-    # Atualizar status
     df_consolidado.loc[mask_update, 'status'] = 'OVERDUE'
-
     print(f"  ✅ {total_atualizados} registros PENDING atualizados para OVERDUE")
 else:
     print(f"  ⚠️ AVISO: Coluna '{col_vencimento}' não encontrada!")
-    print(f"  Colunas disponíveis: {df_consolidado.columns.tolist()}")
 
 # ===================== Criar nova coluna com valor calculado =====================
 print(f"\n🔄 Criando coluna 'Valor Calculado'...")
 
-# Nomes das colunas (ajuste se necessário caso os nomes sejam diferentes)
 col_pago = "Valor total pago da parcela (R$)"
 col_aberto = "Valor da parcela em aberto (R$)"
 
-# Garantir que as colunas existam
 if col_pago not in df_consolidado.columns or col_aberto not in df_consolidado.columns:
     print(f"  ⚠️ AVISO: Colunas esperadas não encontradas!")
-    print(f"  Colunas disponíveis: {df_consolidado.columns.tolist()}")
 else:
-    # Criar a nova coluna baseada nas condições
     def calcular_valor(row):
         if row['status'] == 'ACQUITTED':
-            # Se ACQUITTED, considerar apenas valor pago
             return row[col_pago]
         elif row['status'] == 'PARTIAL':
-            # Se PARTIAL, somar valor pago + valor em aberto
             return row[col_pago] + row[col_aberto]
         else:
-            # Para outros status (PENDING, OVERDUE, LOST), considerar valor em aberto
             return row[col_aberto]
 
     df_consolidado['Valor Calculado'] = df_consolidado.apply(calcular_valor, axis=1)
@@ -135,13 +114,35 @@ else:
 # ===================== Converter colunas datetime para string =====================
 print(f"\n🔄 Convertendo colunas de data para string...")
 
-# Identificar colunas de tipo datetime
 datetime_columns = df_consolidado.select_dtypes(include=['datetime64']).columns.tolist()
 
-# Converter cada coluna datetime para string no formato desejado
 for col in datetime_columns:
     df_consolidado[col] = df_consolidado[col].dt.strftime('%d/%m/%Y')
     print(f"  ✅ Coluna '{col}' convertida para string")
+
+# ===================== Renomear colunas conforme especificação =====================
+print(f"\n🔄 Renomeando colunas...")
+
+colunas_renomear = {
+    "Data de vencimento": "dueDate",
+    "Data de competência": "financialEvent.competenceDate",
+    "Valor Calculado": "paid",
+    "Centro de Custo 1": "categoriesRatio.costCentersRatio.0.costCenter",
+    "Categoria 1": "financialEvent.categoryDescriptions",
+    "Descrição": "description",
+    "Nome do fornecedor": "financialEvent.negotiator.name",
+    "Data do último pagamento": "lastAcquittanceDate"
+}
+
+colunas_renomeadas = {}
+for col_antiga, col_nova in colunas_renomear.items():
+    if col_antiga in df_consolidado.columns:
+        colunas_renomeadas[col_antiga] = col_nova
+        print(f"  ✅ '{col_antiga}' → '{col_nova}'")
+    else:
+        print(f"  ⚠️ Coluna '{col_antiga}' não encontrada")
+
+df_consolidado.rename(columns=colunas_renomeadas, inplace=True)
 
 # ===================== Buscar ID da planilha no Google Drive =====================
 folder_id = "1_kJtBN_cr_WpND1nF3WtI5smi3LfIxNy"
