@@ -18,8 +18,7 @@ sheets_service = build("sheets", "v4", credentials=credentials)
 export_url = "https://services.contaazul.com/finance-pro-reports/api/v1/installment-view/export"
 headers = {
     'x-authorization': '00e3b816-f844-49ee-a75e-3da30f1c2630',
-    'Content-Type': 'application/json',
-    'User-Agent': 'Mozilla/5.0'
+    'Content-Type': 'application/json'
 }
 
 # Lista de status para processar
@@ -78,6 +77,33 @@ if 'id' in df_consolidado.columns:
 else:
     print(f"📋 Total de registros consolidados: {len(df_consolidado)}")
 
+# ===================== Criar nova coluna com valor calculado =====================
+print(f"\n🔄 Criando coluna 'Valor Calculado'...")
+
+# Nomes das colunas (ajuste se necessário caso os nomes sejam diferentes)
+col_pago = "Valor total pago da parcela (R$)"
+col_aberto = "Valor da parcela em aberto (R$)"
+
+# Garantir que as colunas existam
+if col_pago not in df_consolidado.columns or col_aberto not in df_consolidado.columns:
+    print(f"  ⚠️ AVISO: Colunas esperadas não encontradas!")
+    print(f"  Colunas disponíveis: {df_consolidado.columns.tolist()}")
+else:
+    # Criar a nova coluna baseada nas condições
+    def calcular_valor(row):
+        if row['status'] == 'ACQUITTED':
+            # Se ACQUITTED, considerar apenas valor pago
+            return row[col_pago]
+        elif row['status'] == 'PARTIAL':
+            # Se PARTIAL, somar valor pago + valor em aberto
+            return row[col_pago] + row[col_aberto]
+        else:
+            # Para outros status (PENDING, OVERDUE, LOST), considerar valor em aberto
+            return row[col_aberto]
+
+    df_consolidado['Valor Calculado'] = df_consolidado.apply(calcular_valor, axis=1)
+    print(f"  ✅ Coluna 'Valor Calculado' criada com sucesso!")
+
 # ===================== Buscar ID da planilha no Google Drive =====================
 folder_id = "1_kJtBN_cr_WpND1nF3WtI5smi3LfIxNy"
 sheet_name = "Financeiro_contas_a_pagar_Bluefields"
@@ -95,7 +121,7 @@ spreadsheet_id = files[0]['id']
 print(f"\n🧹 Limpando planilha '{sheet_name}'...")
 sheets_service.spreadsheets().values().clear(
     spreadsheetId=spreadsheet_id,
-    range="A:BA"
+    range="A:Z"
 ).execute()
 
 # ===================== Atualizar dados na planilha =====================
