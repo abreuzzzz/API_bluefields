@@ -4,7 +4,6 @@ import gspread
 import pandas as pd
 from gspread_dataframe import get_as_dataframe, set_with_dataframe
 from oauth2client.service_account import ServiceAccountCredentials
-from datetime import datetime
 
 # 🔐 Lê o segredo e salva como credentials.json
 gdrive_credentials = os.getenv("GDRIVE_SERVICE_ACCOUNT")
@@ -49,7 +48,7 @@ campos_data = ['lastAcquittanceDate', 'financialEvent.competenceDate', 'dueDate'
 print("📅 Convertendo campos de data para formato YYYY-MM-DD...")
 for campo in campos_data:
     if campo in df_completo.columns:
-        # Converte para datetime especificando o formato DD/MM/YYYY
+        # Converte para datetime especificando o formato de entrada DD/MM/YYYY
         df_completo[campo] = pd.to_datetime(
             df_completo[campo], 
             format='%d/%m/%Y',
@@ -58,19 +57,6 @@ for campo in campos_data:
         )
         # Converte para string no formato YYYY-MM-DD
         df_completo[campo] = df_completo[campo].dt.strftime('%Y-%m-%d')
-
-# Remove linhas com competenceDate maior que hoje
-if 'financialEvent.competenceDate' in df_completo.columns:
-    print("🗓️ Filtrando registros por data de competência...")
-    # Reconverte temporariamente para comparação
-    df_completo['financialEvent.competenceDate'] = pd.to_datetime(
-        df_completo['financialEvent.competenceDate'], 
-        format='%Y-%m-%d',
-        errors='coerce'
-    )
-    df_completo = df_completo[df_completo['financialEvent.competenceDate'] <= datetime.today()]
-    # Volta para string no formato YYYY-MM-DD
-    df_completo['financialEvent.competenceDate'] = df_completo['financialEvent.competenceDate'].dt.strftime('%Y-%m-%d')
 
 # Corrige valores da coluna categoriesRatio.value com base na condição
 if 'categoriesRatio.value' in df_completo.columns and 'paid' in df_completo.columns:
