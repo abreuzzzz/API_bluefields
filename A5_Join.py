@@ -48,15 +48,17 @@ campos_data = ['lastAcquittanceDate', 'financialEvent.competenceDate', 'dueDate'
 print("📅 Convertendo campos de data para formato YYYY-MM-DD...")
 for campo in campos_data:
     if campo in df_completo.columns:
-        # Converte para datetime especificando o formato de entrada DD/MM/YYYY
+        # Converte para datetime usando format='mixed' para lidar com múltiplos formatos
         df_completo[campo] = pd.to_datetime(
             df_completo[campo], 
-            format='%d/%m/%Y',
+            format='mixed',
             dayfirst=True,
             errors='coerce'
         )
         # Converte para string no formato YYYY-MM-DD
         df_completo[campo] = df_completo[campo].dt.strftime('%Y-%m-%d')
+        # Substitui valores NaT (datas inválidas) por string vazia
+        df_completo[campo] = df_completo[campo].replace('NaT', '')
 
 # Corrige valores da coluna categoriesRatio.value com base na condição
 if 'categoriesRatio.value' in df_completo.columns and 'paid' in df_completo.columns:
