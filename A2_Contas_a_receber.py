@@ -3,6 +3,7 @@ import json
 import pandas as pd
 import requests
 from io import BytesIO
+from datetime import datetime, timedelta
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 
@@ -23,7 +24,7 @@ headers = {
 }
 
 # Lista de status para processar
-status_list = ["ACQUITTED", "PARTIAL", "PENDING", "OVERDUE", "LOST"]
+status_list = ["ACQUITTED", "PARTIAL", "PENDING", "LOST"]
 
 # ===================== Baixar e consolidar arquivos XLSX =====================
 print("🔄 Iniciando download dos arquivos XLSX para cada status...")
@@ -77,6 +78,32 @@ if 'id' in df_consolidado.columns:
     print(f"📋 Total de registros únicos após remoção de duplicatas: {len(df_consolidado)}")
 else:
     print(f"📋 Total de registros consolidados: {len(df_consolidado)}")
+
+# ===================== Atualizar status PENDING para OVERDUE =====================
+print(f"\n🔄 Verificando status PENDING com data vencida...")
+
+# Calcular data de ontem
+ontem = datetime.now() - timedelta(days=1)
+ontem = ontem.replace(hour=0, minute=0, second=0, microsecond=0)
+
+# Nome da coluna de data de vencimento (ajuste se necessário)
+col_vencimento = "Data de vencimento"
+
+if col_vencimento in df_consolidado.columns:
+    # Converter coluna de vencimento para datetime
+    df_consolidado[col_vencimento] = pd.to_datetime(df_consolidado[col_vencimento], errors='coerce')
+
+    # Contar quantos serão atualizados
+    mask_update = (df_consolidado['status'] == 'PENDING') & (df_consolidado[col_vencimento] <= ontem)
+    total_atualizados = mask_update.sum()
+
+    # Atualizar status
+    df_consolidado.loc[mask_update, 'status'] = 'OVERDUE'
+
+    print(f"  ✅ {total_atualizados} registros PENDING atualizados para OVERDUE")
+else:
+    print(f"  ⚠️ AVISO: Coluna '{col_vencimento}' não encontrada!")
+    print(f"  Colunas disponíveis: {df_consolidado.columns.tolist()}")
 
 # ===================== Criar nova coluna com valor calculado =====================
 print(f"\n🔄 Criando coluna 'Valor Calculado'...")
@@ -137,7 +164,7 @@ sheets_service.spreadsheets().values().update(
 
 print(f"\n✅ Planilha Google '{sheet_name}' atualizada com sucesso!")
 print(f"📊 Total de registros: {len(df_consolidado)}")
-print(f"📊 Registros por status:")
+print(f"📊 Registros por status (após ajustes):")
 for status in status_list:
     count = len(df_consolidado[df_consolidado['status'] == status])
     print(f"  - {status}: {count} registros")
