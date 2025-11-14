@@ -143,6 +143,32 @@ for col in datetime_columns:
     df_consolidado[col] = df_consolidado[col].dt.strftime('%d/%m/%Y')
     print(f"  ✅ Coluna '{col}' convertida para string")
 
+# ===================== Renomear colunas conforme especificação =====================
+print(f"\n🔄 Renomeando colunas...")
+
+# Dicionário de mapeamento: nome_antigo -> nome_novo
+colunas_renomear = {
+    "Data de vencimento": "dueDate",
+    "Data de competência": "financialEvent.competenceDate",
+    "Valor Calculado": "paid",
+    "Centro de Custo 1": "categoriesRatio.costCentersRatio.0.costCenter",
+    "Categoria 1": "financialEvent.categoryDescriptions",
+    "Descrição": "description",
+    "Nome do cliente": "financialEvent.negotiator.name",
+    "Data do último pagamento": "lastAcquittanceDate"
+}
+
+# Renomear apenas as colunas que existem no DataFrame
+colunas_renomeadas = {}
+for col_antiga, col_nova in colunas_renomear.items():
+    if col_antiga in df_consolidado.columns:
+        colunas_renomeadas[col_antiga] = col_nova
+        print(f"  ✅ '{col_antiga}' → '{col_nova}'")
+    else:
+        print(f"  ⚠️ Coluna '{col_antiga}' não encontrada")
+
+df_consolidado.rename(columns=colunas_renomeadas, inplace=True)
+
 # ===================== Buscar ID da planilha no Google Drive =====================
 folder_id = "1_kJtBN_cr_WpND1nF3WtI5smi3LfIxNy"
 sheet_name = "Financeiro_contas_a_receber_Bluefields"
