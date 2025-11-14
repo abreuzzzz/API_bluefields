@@ -23,6 +23,7 @@ headers = {
     'User-Agent': 'Mozilla/5.0'
 }
 
+# Lista de status para processar
 status_list = ["ACQUITTED", "PARTIAL", "PENDING", "LOST"]
 
 # ===================== Baixar e consolidar arquivos XLSX =====================
@@ -111,12 +112,12 @@ else:
     print(f"  ✅ Coluna 'Valor Calculado' criada com sucesso!")
 
 # ===================== Converter colunas datetime para string =====================
-print(f"\n🔄 Convertendo colunas de data para string (formato YYYY-MM-DD)...")
+print(f"\n🔄 Convertendo colunas de data para string...")
 
 datetime_columns = df_consolidado.select_dtypes(include=['datetime64']).columns.tolist()
 
 for col in datetime_columns:
-    df_consolidado[col] = df_consolidado[col].dt.strftime('%Y-%m-%d')
+    df_consolidado[col] = df_consolidado[col].dt.strftime('%d/%m/%Y')
     print(f"  ✅ Coluna '{col}' convertida para string")
 
 # ===================== Renomear colunas conforme especificação =====================
