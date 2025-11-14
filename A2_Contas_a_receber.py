@@ -224,8 +224,8 @@ if not cost_centers:
     raise Exception("Nenhum centro de custo encontrado.")
 
 # Gerar períodos
-data_inicio = datetime(2015, 1, 1)
-data_fim = datetime(2030, 12, 31)
+data_inicio = datetime(2017, 1, 1)
+data_fim = datetime(2026, 12, 31)
 print(f"\n🔄 Gerando períodos de 15 dias entre {data_inicio.date()} e {data_fim.date()}...")
 periodos = gerar_periodos(data_inicio, data_fim)
 
