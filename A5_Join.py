@@ -4,7 +4,6 @@ import gspread
 import pandas as pd
 from gspread_dataframe import get_as_dataframe, set_with_dataframe
 from oauth2client.service_account import ServiceAccountCredentials
-from datetime import datetime
 
 # 🔐 Lê o segredo e salva como credentials.json
 gdrive_credentials = os.getenv("GDRIVE_SERVICE_ACCOUNT")
@@ -23,38 +22,11 @@ planilhas_ids = {
     "Financeiro_Completo_Bluefields": "1sBKeD9Bgwy59xAJzetF1gVDShrnCocQnuYB2CRtutPk"
 }
 
-# === Função para converter data de qualquer formato para YYYY-MM-DD ===
-def converter_data_para_iso(data_str):
-    """Converte data de DD/MM/YYYY ou outros formatos para YYYY-MM-DD"""
-    if pd.isna(data_str) or data_str == '' or data_str is None:
-        return ''
-    
-    try:
-        # Tenta converter string para datetime
-        if isinstance(data_str, str):
-            # Remove espaços extras
-            data_str = data_str.strip()
-            
-            # Tenta formato DD/MM/YYYY primeiro
-            if '/' in data_str:
-                dt = pd.to_datetime(data_str, format='%d/%m/%Y', dayfirst=True)
-            # Tenta formato YYYY-MM-DD
-            elif '-' in data_str:
-                dt = pd.to_datetime(data_str, format='%Y-%m-%d')
-            else:
-                dt = pd.to_datetime(data_str, dayfirst=True)
-        else:
-            dt = pd.to_datetime(data_str, dayfirst=True)
-        
-        return dt.strftime('%Y-%m-%d')
-    except:
-        return ''
-
 # === Função para abrir e ler planilha por ID ===
 def ler_planilha_por_id(nome_arquivo):
     planilha = client.open_by_key(planilhas_ids[nome_arquivo])
     aba = planilha.sheet1
-    # Lê tudo como string para evitar conversões automáticas
+    # Lê tudo como string para manter formato original
     df = get_as_dataframe(aba, dtype=str).dropna(how="all")
     return df
 
@@ -71,27 +43,30 @@ df_pagar["tipo"] = "Despesa"
 print("🔗 Consolidando dados de receitas e despesas...")
 df_completo = pd.concat([df_receber, df_pagar], ignore_index=True)
 
-# === CONVERSÃO DAS DATAS PARA FORMATO YYYY-MM-DD ===
+# === MANTÉM AS DATAS NO FORMATO ORIGINAL - APENAS GARANTE QUE SEJAM STRING ===
 campos_data = ['lastAcquittanceDate', 'financialEvent.competenceDate', 'dueDate']
 
-print("📅 Convertendo campos de data para formato YYYY-MM-DD...")
+print("📅 Garantindo que campos de data permaneçam como string no formato original...")
 for campo in campos_data:
     if campo in df_completo.columns:
-        print(f"  Convertendo campo: {campo}")
-        # Aplica a função de conversão em cada célula
-        df_completo[campo] = df_completo[campo].apply(converter_data_para_iso)
+        print(f"  Mantendo formato original do campo: {campo}")
+        # Apenas converte para string, sem alterar formato
+        df_completo[campo] = df_completo[campo].astype(str)
+        # Substitui 'nan' por string vazia
+        df_completo[campo] = df_completo[campo].replace('nan', '')
 
 # Corrige valores da coluna categoriesRatio.value com base na condição
 if 'categoriesRatio.value' in df_completo.columns and 'paid' in df_completo.columns:
     print("💰 Corrigindo valores de categoriesRatio.value...")
-    # Converte para numérico antes de comparar
-    df_completo['categoriesRatio.value'] = pd.to_numeric(df_completo['categoriesRatio.value'], errors='coerce')
-    df_completo['paid'] = pd.to_numeric(df_completo['paid'], errors='coerce')
+    # Converte para numérico apenas para comparação, mas mantém como string no final
+    valor_temp = pd.to_numeric(df_completo['categoriesRatio.value'], errors='coerce')
+    paid_temp = pd.to_numeric(df_completo['paid'], errors='coerce')
     
-    df_completo['categoriesRatio.value'] = df_completo.apply(
-        lambda row: row['paid'] if pd.notna(row['categoriesRatio.value']) and pd.notna(row['paid']) and row['categoriesRatio.value'] > row['paid'] else row['categoriesRatio.value'],
-        axis=1
-    )
+    # Cria máscara para identificar onde precisa corrigir
+    mascara = (pd.notna(valor_temp)) & (pd.notna(paid_temp)) & (valor_temp > paid_temp)
+    
+    # Aplica correção mantendo como string
+    df_completo.loc[mascara, 'categoriesRatio.value'] = df_completo.loc[mascara, 'paid']
 
 # Estatísticas finais
 print(f"\n📊 Resumo dos dados processados:")
