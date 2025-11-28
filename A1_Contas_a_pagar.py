@@ -127,7 +127,6 @@ colunas_renomear = {
     "Data de vencimento": "dueDate",
     "Data de competência": "financialEvent.competenceDate",
     "Valor Calculado": "paid",
-    "Centro de Custo 1": "categoriesRatio.costCentersRatio.0.costCenter",
     "Categoria 1": "categoriesRatio.category",
     "Descrição": "description",
     "Nome do fornecedor": "financialEvent.negotiator.name",
@@ -146,7 +145,7 @@ df_consolidado.rename(columns=colunas_renomeadas, inplace=True)
 
 # ===================== Buscar ID da planilha no Google Drive =====================
 folder_id = "1_kJtBN_cr_WpND1nF3WtI5smi3LfIxNy"
-sheet_name = "Financeiro_contas_a_pagar_Bluefields"
+sheet_name = "Financeiro_contas_a_pagar_King"
 
 query = f"name='{sheet_name}' and mimeType='application/vnd.google-apps.spreadsheet' and '{folder_id}' in parents and trashed=false"
 results = drive_service.files().list(q=query, spaces='drive', fields="files(id, name)").execute()
