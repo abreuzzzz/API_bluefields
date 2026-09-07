@@ -8,17 +8,23 @@ os registros que NÃO possuem boleto/anexo (attachment = False).
 
 A saída é gravada diretamente na planilha Google especificada por spreadsheetId + gid.
 
-OBS IMPORTANTE: a API impõe um limite de paginação por consulta (observado:
+OBS IMPORTANTE 1: a API impõe um limite de paginação por consulta (observado:
 erro 'page_number_exceeds_max_allowed' ao tentar acessar a página 21 com
 page_size=50, ou seja, ~1000 itens é o teto por janela de datas). Por isso o
 script quebra o período total (DUE_DATE_FROM a DUE_DATE_TO) em fatias
 mensais e faz uma consulta paginada para cada fatia, concatenando o resultado.
+
+OBS IMPORTANTE 2: a API também aplica rate limit (HTTP 429 "Rate limit
+exceeded") quando as requisições são feitas rápido demais. Por isso todas as
+chamadas passam por uma função com retry + backoff exponencial, e há um
+intervalo (SLEEP_ENTRE_REQUESTS) entre cada requisição, mesmo as bem-sucedidas.
 """
 
 import os
 import json
 import time
 import calendar
+import random
 import pandas as pd
 import requests
 from datetime import datetime
@@ -51,6 +57,49 @@ CAMPO_BOLETO = "attachment"
 # Google Sheets - destino fixo
 SPREADSHEET_ID = "1As4IarqpWofUxl6g4X0TRuBMIgP-uJEFkWDIqqFcZBY"
 SHEET_GID = 1340984929
+
+# ===================== Controle de rate limit =====================
+SLEEP_ENTRE_REQUESTS = 1.2     # segundos entre cada requisição bem-sucedida
+SLEEP_ENTRE_JANELAS = 1.5      # segundos extras entre uma janela mensal e outra
+MAX_RETRIES = 6                # tentativas em caso de 429/erro transitório
+BACKOFF_BASE = 3               # segundos base do backoff exponencial
+
+
+# ===================== Função: requisição com retry/backoff =====================
+def post_com_retry(url, headers, params, payload):
+    for tentativa in range(1, MAX_RETRIES + 1):
+        try:
+            resp = requests.post(url, headers=headers, params=params, data=json.dumps(payload))
+
+            if resp.status_code == 429:
+                espera = BACKOFF_BASE * (2 ** (tentativa - 1)) + random.uniform(0, 1)
+                print(f"      ⏳ Rate limit (429). Tentativa {tentativa}/{MAX_RETRIES}. "
+                      f"Aguardando {espera:.1f}s...")
+                time.sleep(espera)
+                continue
+
+            resp.raise_for_status()
+            return resp
+
+        except requests.exceptions.HTTPError as e:
+            status = e.response.status_code if e.response is not None else None
+            if status in (500, 502, 503, 504) and tentativa < MAX_RETRIES:
+                espera = BACKOFF_BASE * (2 ** (tentativa - 1))
+                print(f"      ⏳ Erro {status}. Tentativa {tentativa}/{MAX_RETRIES}. "
+                      f"Aguardando {espera:.1f}s...")
+                time.sleep(espera)
+                continue
+            raise
+        except requests.exceptions.RequestException:
+            if tentativa < MAX_RETRIES:
+                espera = BACKOFF_BASE * (2 ** (tentativa - 1))
+                print(f"      ⏳ Erro de conexão. Tentativa {tentativa}/{MAX_RETRIES}. "
+                      f"Aguardando {espera:.1f}s...")
+                time.sleep(espera)
+                continue
+            raise
+
+    raise Exception(f"❌ Excedido número máximo de tentativas ({MAX_RETRIES}) para {url}")
 
 
 # ===================== Função: gerar fatias mensais de data =====================
@@ -98,13 +147,7 @@ def buscar_paginas_janela(due_date_from, due_date_to):
         params = {"page": page, "page_size": PAGE_SIZE}
 
         try:
-            resp = requests.post(
-                BASE_URL,
-                headers=HEADERS,
-                params=params,
-                data=json.dumps(payload)
-            )
-            resp.raise_for_status()
+            resp = post_com_retry(BASE_URL, HEADERS, params, payload)
             data = resp.json()
         except requests.exceptions.RequestException as e:
             print(f"    ⚠️ Erro na página {page} ({due_date_from} a {due_date_to}): {e}")
@@ -124,14 +167,14 @@ def buscar_paginas_janela(due_date_from, due_date_to):
             break
 
         page += 1
-        time.sleep(0.15)
+        time.sleep(SLEEP_ENTRE_REQUESTS)
 
     return items_janela, total_items
 
 
 # ===================== Função: buscar todas as páginas (todas as janelas) =====================
 def buscar_todos_itens():
-    print("🔄 Iniciando download via installment-view (fatiado por mês, POST)...")
+    print("🔄 Iniciando download via installment-view (fatiado por mês, POST, com retry)...")
 
     fatias = gerar_fatias_mensais(DUE_DATE_FROM, DUE_DATE_TO)
     print(f"📅 Período total dividido em {len(fatias)} janelas mensais "
@@ -149,7 +192,7 @@ def buscar_todos_itens():
             print(f"    ℹ️ Nenhum item nesta janela")
 
         all_items.extend(items_janela)
-        time.sleep(0.15)
+        time.sleep(SLEEP_ENTRE_JANELAS)
 
     # Remove duplicatas (caso alguma parcela apareça em mais de uma janela por borda de mês)
     ids_vistos = set()
