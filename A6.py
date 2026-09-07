@@ -7,6 +7,16 @@ percorrer TODAS as páginas, expandir TODOS os campos aninhados e manter apenas
 os registros que NÃO possuem boleto/anexo (attachment = False).
 
 A saída é gravada diretamente na planilha Google especificada por spreadsheetId + gid.
+
+OBS: payload confirmado via captura de rede do navegador (POST):
+{
+  "dueDateFrom": "2026-09-01",
+  "dueDateTo": "2026-09-30",
+  "quickFilter": "ALL",
+  "search": "",
+  "type": "EXPENSE",
+  "selectedColumns": ["DUE_DATE","PAYMENT_DATE","SUMMARY","VALUE","UNPAID","STATUS"]
+}
 """
 
 import os
@@ -14,6 +24,7 @@ import json
 import time
 import pandas as pd
 import requests
+from datetime import datetime
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 
@@ -29,6 +40,20 @@ HEADERS = {
     "User-Agent": "Mozilla/5.0"
 }
 
+# Período de vencimento a consultar. Ajuste conforme necessário.
+DUE_DATE_FROM = "2025-01-01"
+DUE_DATE_TO = "2026-09-30"
+
+# Payload confirmado via captura de rede real do navegador.
+PAYLOAD_BASE = {
+    "dueDateFrom": DUE_DATE_FROM,
+    "dueDateTo": DUE_DATE_TO,
+    "quickFilter": "ALL",
+    "search": "",
+    "type": "EXPENSE",
+    "selectedColumns": ["DUE_DATE", "PAYMENT_DATE", "SUMMARY", "VALUE", "UNPAID", "STATUS"]
+}
+
 # Campo do JSON que indica se há boleto/anexo vinculado ao lançamento.
 CAMPO_BOLETO = "attachment"
 
@@ -39,7 +64,7 @@ SHEET_GID = 1340984929
 
 # ===================== Função: buscar todas as páginas =====================
 def buscar_todas_paginas():
-    print("🔄 Iniciando download via installment-view (todas as páginas)...")
+    print("🔄 Iniciando download via installment-view (todas as páginas, POST)...")
 
     all_items = []
     page = 1
@@ -50,11 +75,18 @@ def buscar_todas_paginas():
         print(f"  📥 Buscando página {page}...")
 
         try:
-            resp = requests.get(BASE_URL, headers=HEADERS, params=params)
+            resp = requests.post(
+                BASE_URL,
+                headers=HEADERS,
+                params=params,
+                data=json.dumps(PAYLOAD_BASE)
+            )
             resp.raise_for_status()
             data = resp.json()
         except requests.exceptions.RequestException as e:
             print(f"  ⚠️ Erro na página {page}: {e}")
+            if hasattr(e, "response") and e.response is not None:
+                print(f"     Resposta: {e.response.text[:500]}")
             break
 
         items = data.get("items", [])
