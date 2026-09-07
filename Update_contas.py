@@ -7,7 +7,7 @@ import subprocess
 caminho_scripts = "./"  # ajuste aqui se estiverem em outro diretório
 
 # Lista todos os arquivos com o padrão especificado
-arquivos = glob.glob(os.path.join(caminho_scripts, "A*.py"))
+arquivos = glob.glob(os.path.join(caminho_scripts, "A6*.py"))
 
 # Ordena os arquivos em ordem alfabética (funciona para nomes padronizados como os seus)
 arquivos.sort()
